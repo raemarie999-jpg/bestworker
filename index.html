@@ -684,6 +684,8 @@ async function fetchForecasts() {
   computeModelScores();
   renderModels();
   renderTimeline();
+  renderSpreadChart();
+  }
 }
 
 async function fetchHistory() {
@@ -770,9 +772,8 @@ function computeModelScores() {
   });
 
   // Compute accuracy errors from history if we have it
-  if (appState.history.length) {
+  if (appState.history.length && !appState.histErrors) {
     computeHistoricalErrors();
-    computeModelScores(); // re-run with real MAE
   }
 }
 
