@@ -691,7 +691,7 @@ async function fetchHistory() {
   // Get last 5 days of daily observations for accuracy comparison
   log(`Fetching 5-day historical observations from ${STATION_PRIMARY}...`);
   try {
-    const data = await apiGet(`/stations/${STATION_PRIMARY}/observations/historical?days=5`);
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history`);
     appState.history = data.data || [];
     log(`Received ${appState.history.length} historical day(s)`, 'ok');
   } catch(e) {
@@ -705,7 +705,7 @@ async function fetchHistory() {
 async function fetchBrackets() {
   log(`Fetching market brackets for ${CITY}...`);
   try {
-    const data = await apiGet(`/cities/${CITY}/brackets`);
+    const data = await apiGet(`/markets?city=${CITY}`);
     appState.brackets = data.data;
     log(`Bracket data received`, 'ok');
   } catch(e) {
