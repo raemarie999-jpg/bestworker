@@ -693,12 +693,12 @@ async function fetchHistory() {
     const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history?type=cli`);
     const reports = data.data?.reports || [];
     const seen = new Set();
-const unique = reports.filter(r => {
-  if (seen.has(r.report_date)) return false;
-  seen.add(r.report_date);
-  return true;
-});
-appState.history = unique.slice(0, 5).map(r => ({
+    const unique = reports.filter(r => {
+      if (seen.has(r.report_date)) return false;
+      seen.add(r.report_date);
+      return true;
+    });
+    appState.history = unique.slice(0, 5).map(r => ({
       date: r.report_date,
       actual_high_f: r.max_temp_f,
       consensus_forecast_f: null,
@@ -1188,7 +1188,7 @@ function renderAccuracy() {
       </thead>
       <tbody>
         ${history.map(day => {
-          const err = Math.abs((day.consensus_forecast_f || 0) - (day.actual_high_f || 0));
+          const err = day.consensus_forecast_f != null ? Math.abs(day.consensus_forecast_f - day.actual_high_f) : null;
           const errC = errClass(err);
           const label = err < 1 ? 'Excellent' : err < 2.5 ? 'Good' : err < 4 ? 'Fair' : 'Poor';
           return `
