@@ -513,8 +513,8 @@
     <!-- Model Score / Top Pick -->
     <div class="panel">
       <div class="panel-header">
-        <div class="panel-title">Reliability Score</div>
-        <div class="panel-badge">based on 5-day MAE</div>
+        <div class="panel-title">Condition-Aware Model Intel</div>
+        <div class="panel-badge" id="conditionBadge">detecting conditions...</div>
       </div>
       <div class="panel-body" id="scorePanel">
         <div class="loading-state"><div class="spinner"></div></div>
@@ -606,8 +606,12 @@ let appState = {
   history: [],
   brackets: null,
   scores: {},
+  oracleScores: [],
+  weatherEvents: [],
+  conditionScores: {},
+  currentCondition: 'unknown',
   logEntries: [],
-};
+};  
 
 // ─────────────────────────────────────────────
 //  UTILITY
@@ -728,240 +732,257 @@ async function fetchBrackets() {
 }
 
 // ─────────────────────────────────────────────
-//  SCORING ALGORITHM
+//  CONDITION DETECTION
 // ─────────────────────────────────────────────
-/*
-  Reliability Score Formula (0-100):
-  1. Consensus Score (40%): How close is model to the mean of all models?
-     Lower deviation = higher consensus = more reliable signal
-  2. Historical MAE Score (40%): Past 5-day mean absolute error from actuals
-     (populated from history; falls back to model metadata if available)
-  3. Spread Penalty (20%): If overall model spread is high, penalize all;
-     reward models in the majority cluster
-*/
+function detectCondition(obs, weatherEvents) {
+  const o = obs?.observation || {};
+  const active = weatherEvents?.active || [];
+
+  const wind = o.wind_speed ?? 0;
+  const gust = o.wind_gust ?? 0;
+  const humidity = o.relative_humidity ?? 0;
+  const wx = (o.text_description || '').toLowerCase();
+  const hasStorm = active.some(e => ['thunderstorm','storm'].includes(e.event_type));
+  const hasPrecip = active.some(e => ['rain','snow','drizzle','freezing'].includes(e.event_type))
+    || wx.includes('rain') || wx.includes('snow') || wx.includes('drizzle');
+  const isCloudy = wx.includes('cloud') || wx.includes('overcast') || wx.includes('fog');
+  const isWindy = wind > 20 || gust > 30;
+  const isFront = active.some(e => e.event_type === 'frontal') || (wind > 15 && humidity > 70);
+
+  if (hasStorm) return 'storm';
+  if (hasPrecip) return 'precip';
+  if (isFront) return 'frontal';
+  if (isWindy) return 'windy';
+  if (isCloudy) return 'cloudy';
+  return 'clear';
+}
+
+const CONDITION_LABELS = {
+  clear:   { label: 'Clear / Sunny',    icon: '☀',  color: 'var(--gold)' },
+  cloudy:  { label: 'Cloudy / Overcast', icon: '☁',  color: 'var(--text-dim)' },
+  windy:   { label: 'Windy',            icon: '💨', color: 'var(--cold)' },
+  precip:  { label: 'Rain / Snow',      icon: '🌧',  color: 'var(--cold)' },
+  storm:   { label: 'Thunderstorm',     icon: '⛈',  color: 'var(--warn)' },
+  frontal: { label: 'Frontal Passage',  icon: '🌬',  color: 'var(--accent)' },
+  unknown: { label: 'Unknown',          icon: '—',   color: 'var(--text-muted)' },
+};
+
+// ─────────────────────────────────────────────
+//  SCORING ENGINE (oracle-based + condition-weighted)
+// ─────────────────────────────────────────────
 function computeModelScores() {
   const forecasts = appState.forecasts;
+  const oracle = appState.oracleScores;
   if (!forecasts.length) return;
 
-  // Extract current-hour temps from each model
-  const hourlyTemps = forecasts.map(f => {
-    const hour0 = f.hourly?.[0];
-    return { model: f.model_id, temp: hour0?.temperature_2m_f, meta: f };
-  }).filter(m => m.temp != null);
+  const hourlyTemps = forecasts.map(f => ({
+    model: f.model_id,
+    temp: f.hourly?.[0]?.temperature_2m_f ?? null,
+  })).filter(m => m.temp !== null);
 
   if (!hourlyTemps.length) return;
 
   const temps = hourlyTemps.map(m => m.temp);
   const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
   const spread = Math.max(...temps) - Math.min(...temps);
+  const maxDev = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean))) || 1;
 
-  // Consensus score: deviation from mean, normalized
-  const maxDev = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean)));
+  // Build oracle lookup: model_id → { high_mae, high_bias, combined_mae }
+  const oracleLookup = {};
+  (oracle || []).forEach(o => { oracleLookup[o.model_id] = o; });
 
-  hourlyTemps.forEach(m => {
-    const dev = Math.abs(m.temp - mean);
-    const consensusScore = maxDev > 0 ? (1 - dev / maxDev) * 40 : 40;
+  hourlyTemps.forEach(({ model, temp }) => {
+    const dev = Math.abs(temp - mean);
+    const o = oracleLookup[model];
 
-    // Historical MAE: use stored errors if available, else estimate
-    const histErrors = appState.histErrors?.[m.model];
-    const maeScore = histErrors != null
-      ? Math.max(0, 40 - histErrors * 8)
-      : 20 + Math.random() * 20; // placeholder until history populates
+    // A) Consensus proximity (30 pts)
+    const consensusScore = (1 - dev / maxDev) * 30;
 
-    // Spread bonus: in tight market, majority-cluster models score higher
-    const spreadPenalty = spread > 5 ? (dev < spread / 3 ? 20 : 5) : 20;
+    // B) Oracle MAE score (50 pts) — real server-side accuracy
+    let maeScore = 20; // default when oracle not available
+    if (o) {
+      const mae = o.high_mae ?? o.combined_mae ?? 5;
+      maeScore = Math.max(0, 50 * (1 - mae / 6));
+    }
 
-    appState.scores[m.model] = {
-      total: Math.min(100, consensusScore + maeScore + spreadPenalty),
-      consensus: consensusScore,
-      mae: maeScore,
-      spread: spreadPenalty,
-      temp: m.temp,
-      dev,
+    // C) Convergence bonus (20 pts)
+    let convergenceScore;
+    if (spread < 2) {
+      convergenceScore = 20;
+    } else if (spread >= 6) {
+      convergenceScore = dev < 1 ? 20 : 0;
+    } else {
+      convergenceScore = Math.max(0, (1 - dev / (spread / 2)) * 20);
+    }
+
+    appState.scores[model] = {
+      total: Math.min(100, Math.round(consensusScore + maeScore + convergenceScore)),
+      consensus: Math.round(consensusScore),
+      mae: Math.round(maeScore),
+      convergence: Math.round(convergenceScore),
+      temp,
+      dev: parseFloat(dev.toFixed(2)),
+      bias: o?.high_bias ?? null,
+      mae_actual: o?.high_mae ?? null,
     };
   });
-
-  // Compute accuracy errors from history if we have it
-if (appState.history.length && !appState.histErrors) {
-    computeHistoricalErrors();
-  }
 }
 
-function computeHistoricalErrors() {
-  // Build per-model MAE from stored history
-  // history entries: { date, actual_high_f, actual_low_f, forecasts: [{model_id, forecast_high_f, forecast_low_f}] }
-  const errors = {};
-  const counts = {};
-  appState.history.forEach(day => {
-    (day.model_forecasts || []).forEach(f => {
-      const err = Math.abs((f.forecast_high_f || 0) - (day.actual_high_f || 0));
-      errors[f.model_id] = (errors[f.model_id] || 0) + err;
-      counts[f.model_id] = (counts[f.model_id] || 0) + 1;
-    });
-  });
-  appState.histErrors = {};
-  Object.keys(errors).forEach(m => {
-    appState.histErrors[m] = errors[m] / counts[m];
+// ─────────────────────────────────────────────
+//  CONDITION-AWARE SCORING
+// ─────────────────────────────────────────────
+function computeConditionScores() {
+  const condition = appState.currentCondition;
+  const oracle = appState.oracleScores;
+  if (!oracle.length) return;
+
+  // Condition-specific weighting:
+  // clear/cloudy → high MAE most important
+  // windy/frontal → bias matters (models that run cold/hot in wind)
+  // storm/precip → combined MAE, penalize high-bias models
+  const weights = {
+    clear:   { mae: 0.6, bias: 0.2, consensus: 0.2 },
+    cloudy:  { mae: 0.5, bias: 0.2, consensus: 0.3 },
+    windy:   { mae: 0.3, bias: 0.5, consensus: 0.2 },
+    frontal: { mae: 0.3, bias: 0.4, consensus: 0.3 },
+    precip:  { mae: 0.5, bias: 0.3, consensus: 0.2 },
+    storm:   { mae: 0.4, bias: 0.4, consensus: 0.2 },
+    unknown: { mae: 0.5, bias: 0.2, consensus: 0.3 },
+  };
+
+  const w = weights[condition] || weights.unknown;
+  const maxMAE = 6;
+
+  appState.conditionScores = {};
+  oracle.forEach(o => {
+    const maeNorm = Math.max(0, 1 - (o.high_mae ?? 3) / maxMAE);
+    const biasNorm = Math.max(0, 1 - Math.abs(o.high_bias ?? 0) / 4);
+    const consensusBase = appState.scores[o.model_id]?.consensus ?? 15;
+    const consensusNorm = consensusBase / 30;
+
+    const condScore = Math.round(
+      (maeNorm * w.mae + biasNorm * w.bias + consensusNorm * w.consensus) * 100
+    );
+
+    appState.conditionScores[o.model_id] = {
+      score: condScore,
+      mae: o.high_mae,
+      bias: o.high_bias,
+      combined_mae: o.combined_mae,
+      name: o.model_name || o.model_id,
+    };
   });
 }
 
 function topModel() {
+  // Prefer condition scores if available, fall back to base scores
+  const cond = Object.entries(appState.conditionScores);
+  if (cond.length) {
+    return cond.sort((a, b) => b[1].score - a[1].score)[0];
+  }
   const entries = Object.entries(appState.scores);
   if (!entries.length) return null;
   return entries.sort((a, b) => b[1].total - a[1].total)[0];
 }
 
 // ─────────────────────────────────────────────
-//  RENDER: CURRENT CONDITIONS
+//  FETCH: ORACLE SCORES
 // ─────────────────────────────────────────────
-function renderCurrentConditions() {
-  const obs = appState.observation;
-  const panel = document.getElementById('currentPanel');
-  if (!obs) {
-    panel.innerHTML = '<div class="error-state">No observation data</div>';
-    return;
+async function fetchOracleScores() {
+  log(`Fetching oracle model scores...`);
+  try {
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/oracle-scores?days=14&mode=day_ahead&rank_by=high`);
+    appState.oracleScores = data.data?.scores || [];
+    log(`Oracle scores: ${appState.oracleScores.length} model(s)`, 'ok');
+  } catch(e) {
+    log(`Oracle scores unavailable (${e.message})`, 'warn');
+    appState.oracleScores = [];
   }
-
-  const o = obs.observation || {};
-  const high = obs.daily_high_f;
-  const low = obs.daily_low_f;
-  const temp = o.temperature_f;
-  const feels = o.feels_like_f;
-  const humidity = o.relative_humidity;
-  const wind = o.wind_speed_mph;
-  const windDir = o.wind_direction || '—';
-  const pressure = o.sea_level_pressure_mb;
-  const dewpoint = o.dewpoint_f;
-  const visibility = o.visibility_miles;
-  const wx = o.weather_description || '—';
-  const obsTime = o.observed_at ? new Date(o.observed_at).toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'}) : '—';
-
-  document.getElementById('obsTime').textContent = obsTime;
-
-  // Range bar: where is current temp between low/high
-  const rangePct = high !== low ? ((temp - low) / (high - low)) * 100 : 50;
-
-  panel.innerHTML = `
-    <div class="current-temp">${fmtTemp(temp)}<span class="unit">F</span></div>
-    <div class="current-feels">feels like ${fmtTemp(feels)} · ${wx}</div>
-    <div class="conditions-grid">
-      <div class="cond-item"><div class="cond-label">Humidity</div><div class="cond-value">${humidity != null ? humidity + '%' : '—'}</div></div>
-      <div class="cond-item"><div class="cond-label">Wind</div><div class="cond-value">${wind != null ? Math.round(wind) + ' mph ' + windDir : '—'}</div></div>
-      <div class="cond-item"><div class="cond-label">Dewpoint</div><div class="cond-value">${fmtTemp(dewpoint)}</div></div>
-      <div class="cond-item"><div class="cond-label">Pressure</div><div class="cond-value">${pressure != null ? Math.round(pressure) + ' mb' : '—'}</div></div>
-      <div class="cond-item"><div class="cond-label">Visibility</div><div class="cond-value">${visibility != null ? visibility + ' mi' : '—'}</div></div>
-      <div class="cond-item"><div class="cond-label">Sky</div><div class="cond-value">${wx}</div></div>
-    </div>
-    <div class="daily-range">
-      <span class="range-label" style="color:var(--cold)">${fmtTemp(low)}</span>
-      <div class="range-bar">
-        <div class="range-fill" style="left:0;width:100%;"></div>
-        <div class="range-cursor" style="left:${Math.max(5, Math.min(95, rangePct))}%;"></div>
-      </div>
-      <span class="range-label" style="color:var(--hot)">${fmtTemp(high)}</span>
-    </div>
-    <div class="station-info">
-      <span class="station-badge">KDFW</span>
-      <span class="station-badge" style="margin-left:4px">ASOS</span>
-    </div>
-  `;
-
-  // Update status
-  document.getElementById('statusDot').style.background = 'var(--green)';
-  document.getElementById('statusText').textContent = 'live';
-  document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 
 // ─────────────────────────────────────────────
-//  RENDER: 20 MODELS GRID
+//  FETCH: WEATHER EVENTS
 // ─────────────────────────────────────────────
-function renderModels() {
-  const panel = document.getElementById('modelsPanel');
-  const forecasts = appState.forecasts;
-  if (!forecasts.length) {
-    panel.innerHTML = '<div class="error-state">No model data</div>';
-    return;
+async function fetchWeatherEvents() {
+  try {
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/weather-events`);
+    appState.weatherEvents = data.data || {};
+    log(`Weather events: ${(appState.weatherEvents.active||[]).length} active`, 'ok');
+  } catch(e) {
+    log(`Weather events unavailable (${e.message})`, 'warn');
+    appState.weatherEvents = {};
   }
-
-  const temps = forecasts.map(f => f.hourly?.[0]?.temperature_2m_f).filter(t => t != null);
-  const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
-  const spread = Math.max(...temps) - Math.min(...temps);
-  const [top] = topModel() || [];
-
-  document.getElementById('modelSpread').textContent = `mean: ${fmtTemp(mean)} · spread: ${fmt(spread, 1)}°`;
-
-  // Sort by score desc
-  const sorted = [...forecasts].sort((a, b) =>
-    (appState.scores[b.model_id]?.total || 0) - (appState.scores[a.model_id]?.total || 0)
-  );
-
-  const maxScore = Math.max(...Object.values(appState.scores).map(s => s.total), 1);
-
-  panel.innerHTML = `<div class="models-grid">` +
-    sorted.map((f, i) => {
-      const h = f.hourly?.[0];
-      const temp = h?.temperature_2m_f;
-      const score = appState.scores[f.model_id];
-      const pct = score ? (score.total / maxScore) * 100 : 0;
-      const isTop = f.model_id === top;
-      const dev = temp != null ? temp - mean : 0;
-      const devStr = dev >= 0 ? `+${fmt(dev, 1)}` : fmt(dev, 1);
-
-      return `
-        <div class="model-cell ${isTop ? 'top-model' : ''}">
-          <div class="model-rank">#${i + 1}</div>
-          <div class="model-name">${f.model_id}</div>
-          <div class="model-temp">${fmtTemp(temp)}</div>
-          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${devStr}° vs mean</div>
-          <div class="model-score-bar" style="width:${pct}%"></div>
-        </div>
-      `;
-    }).join('') + `</div>`;
 }
 
 // ─────────────────────────────────────────────
-//  RENDER: RELIABILITY SCORE
+//  RENDER: CONDITION-AWARE MODEL INTEL
 // ─────────────────────────────────────────────
 function renderScore() {
   const panel = document.getElementById('scorePanel');
-  const scored = Object.entries(appState.scores)
-    .sort((a, b) => b[1].total - a[1].total)
-    .slice(0, 8);
 
-  if (!scored.length) {
+  // Detect and store current condition
+  appState.currentCondition = detectCondition(appState.observation, appState.weatherEvents);
+  computeConditionScores();
+
+  const condition = appState.currentCondition;
+  const cInfo = CONDITION_LABELS[condition] || CONDITION_LABELS.unknown;
+
+  // Update badge
+  const badge = document.getElementById('conditionBadge');
+  if (badge) badge.textContent = cInfo.icon + ' ' + cInfo.label;
+
+  // Build ranked list — prefer conditionScores, fall back to base scores
+  const hasCond = Object.keys(appState.conditionScores).length > 0;
+  const ranked = hasCond
+    ? Object.entries(appState.conditionScores)
+        .sort((a, b) => b[1].score - a[1].score)
+        .slice(0, 8)
+        .map(([id, s]) => ({ id, score: s.score, mae: s.mae, bias: s.bias, name: s.name }))
+    : Object.entries(appState.scores)
+        .sort((a, b) => b[1].total - a[1].total)
+        .slice(0, 8)
+        .map(([id, s]) => ({ id, score: s.total, mae: s.mae_actual, bias: s.bias, name: id }));
+
+  if (!ranked.length) {
     panel.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
     return;
   }
 
-  const [topName, topData] = scored[0];
-  const maxScore = scored[0][1].total;
-
-  const reasons = [];
-  if (topData.consensus > 30) reasons.push('high consensus');
-  if (topData.dev < 1) reasons.push('near ensemble mean');
-  if (topData.mae > 25) reasons.push('strong recent accuracy');
-  if (reasons.length === 0) reasons.push('balanced across all metrics');
+  const top = ranked[0];
+  const maxScore = ranked[0].score || 1;
+  const biasStr = (b) => b == null ? '—' : (b > 0 ? `+${b.toFixed(1)}°` : `${b.toFixed(1)}°`);
+  const maeStr = (m) => m == null ? '—' : `${m.toFixed(2)}°`;
 
   panel.innerHTML = `
     <div class="score-card">
       <div class="top-pick">
-        <div class="top-pick-label">★ Top Pick Today</div>
-        <div class="top-pick-model">${topName}</div>
-        <div class="top-pick-score">${fmt(topData.total, 0)}/100 reliability score</div>
-        <div class="top-pick-reason">Ranked #1: ${reasons.join(', ')}.</div>
+        <div class="top-pick-label">★ Best Model · ${cInfo.icon} ${cInfo.label}</div>
+        <div class="top-pick-model">${top.name || top.id}</div>
+        <div style="display:flex;gap:12px;margin-top:4px;font-size:11px;font-family:var(--mono);">
+          <span style="color:var(--text-dim)">MAE <span style="color:var(--accent)">${maeStr(top.mae)}</span></span>
+          <span style="color:var(--text-dim)">Bias <span style="color:${(top.bias??0)>0?'var(--hot)':'var(--cold)'}">${biasStr(top.bias)}</span></span>
+          <span style="color:var(--text-dim)">Score <span style="color:var(--gold)">${top.score}/100</span></span>
+        </div>
+        <div class="top-pick-reason" style="margin-top:6px;font-size:10px;color:var(--text-muted)">
+          Weighted for <strong style="color:var(--text-dim)">${cInfo.label}</strong> conditions over 14-day window
+        </div>
       </div>
       <div class="score-list">
-        ${scored.map(([name, s], i) => `
+        ${ranked.map((m, i) => `
           <div class="score-row">
             <div class="score-rank">${i + 1}</div>
-            <div class="score-model-name">${name}</div>
-            <div class="score-bar-wrap">
-              <div class="score-bar-fill" style="width:${(s.total / maxScore) * 100}%;${i === 0 ? 'background:var(--accent)' : 'background:var(--text-muted)'}"></div>
+            <div class="score-model-name" style="font-size:10px">${m.name || m.id}</div>
+            <div style="font-size:9px;color:var(--text-muted);margin-left:auto;margin-right:6px;font-family:var(--mono)">
+              ${maeStr(m.mae)} · ${biasStr(m.bias)}
             </div>
-            <div class="score-num">${fmt(s.total, 0)}</div>
+            <div class="score-bar-wrap" style="width:60px">
+              <div class="score-bar-fill" style="width:${(m.score/maxScore)*100}%;${i===0?'background:var(--accent)':'background:var(--text-muted)'}"></div>
+            </div>
+            <div class="score-num">${m.score}</div>
           </div>
         `).join('')}
       </div>
+      ${!hasCond ? '<div style="padding:6px 0 0;font-size:10px;color:var(--text-muted)">Oracle scores loading — showing consensus-based ranking</div>' : ''}
     </div>
   `;
 }
@@ -1289,6 +1310,8 @@ async function refreshAll() {
       fetchForecasts().catch(e => log('Forecast error: ' + e.message, 'err')),
       fetchHistory().catch(e => log('History error: ' + e.message, 'warn')),
       fetchBrackets().catch(e => log('Bracket error: ' + e.message, 'warn')),
+      fetchOracleScores().catch(e => log('Oracle error: ' + e.message, 'warn')),
+      fetchWeatherEvents().catch(e => log('Events error: ' + e.message, 'warn')),
     ]);
 
     // Re-render score after all data is in
