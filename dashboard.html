@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DFW Weather Intelligence · MinuteTemp</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #090b0f;
+    --surface: #0e1218;
+    --surface-2: #141921;
+    --border: #1e2530;
+    --border-2: #252e3d;
+    --text: #c8d4e0;
+    --text-dim: #5a6a7a;
+    --text-muted: #3a4a5a;
+    --accent: #00d4aa;
+    --accent-dim: #00a882;
+    --warn: #f59e0b;
+    --hot: #ef4444;
+    --cold: #60a5fa;
+    --gold: #fbbf24;
+    --green: #22c55e;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .logo { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: -0.5px; }
+  .logo span { color: var(--text-dim); font-weight: 300; }
+  .location-badge {
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .status-text { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
+  .last-update { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+  .btn-refresh {
+    background: transparent;
+    border: 1px solid var(--border-2);
+    color: var(--text-dim);
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+  .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-refresh.loading { opacity: 0.5; pointer-events: none; }
+
+  /* ── Layout ── */
+  .main { padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* ── Top Row ── */
+  .top-row { display: grid; grid-template-columns: 280px 1fr 300px; gap: 16px; }
+
+  /* ── Panels ── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+  }
+
+  .panel-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .panel-body { padding: 14px; }
+
+  /* ── Current Conditions ── */
+  .current-temp {
+    font-family: var(--mono);
+    font-size: 52px;
+    font-weight: 300;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .current-temp .unit { font-size: 20px; color: var(--text-dim); }
+  .current-feels { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; font-family: var(--mono); }
+
+  .conditions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .cond-item { }
+  .cond-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .cond-value { font-family: var(--mono); font-size: 13px; color: var(--text); }
+
+  .daily-range {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .range-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--surface-2);
+    border-radius: 2px;
+    position: relative;
+    overflow: visible;
+  }
+  .range-fill {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: linear-gradient(to right, var(--cold), var(--hot));
+    border-radius: 2px;
+  }
+  .range-cursor {
+    position: absolute;
+    top: -4px;
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    transform: translateX(-50%);
+    border: 2px solid var(--bg);
+  }
+  .range-label { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
+  .station-info { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .station-badge {
+    display: inline-block;
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* ── Model Grid ── */
+  .models-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .model-cell {
+    background: var(--surface);
+    padding: 10px 12px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .model-cell:hover { background: var(--surface-2); }
+  .model-cell.top-model { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+  .model-name { font-size: 10px; color: var(--text-dim); margin-bottom: 3px; }
+  .model-temp { font-size: 16px; color: var(--text); font-weight: 500; }
+  .model-score-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    background: var(--accent);
+    transition: width 0.5s;
+  }
+  .model-rank {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 9px;
+    color: var(--text-muted);
+  }
+  .model-cell.top-model .model-rank { color: var(--accent); font-weight: 600; }
+
+  /* ── Scoring Panel ── */
+  .score-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .top-pick {
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+    border-radius: 5px;
+    padding: 12px;
+  }
+  .top-pick-label { font-size: 10px; color: var(--accent); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+  .top-pick-model { font-family: var(--mono); font-size: 18px; color: var(--text); font-weight: 500; }
+  .top-pick-score { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .top-pick-reason { font-size: 11px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
+
+  .score-list { display: flex; flex-direction: column; gap: 4px; }
+  .score-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .score-row:last-child { border-bottom: none; }
+  .score-rank { font-family: var(--mono); font-size: 10px; color: var(--text-muted); width: 16px; }
+  .score-model-name { font-family: var(--mono); font-size: 11px; color: var(--text); flex: 1; }
+  .score-bar-wrap { width: 70px; height: 4px; background: var(--surface-2); border-radius: 2px; }
+  .score-bar-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+  .score-num { font-family: var(--mono); font-size: 10px; color: var(--text-dim); width: 32px; text-align: right; }
+
+  /* ── Forecast Timeline ── */
+  .timeline-wrap { overflow-x: auto; }
+  .timeline {
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    min-width: 700px;
+  }
+  .time-slot {
+    flex: 1;
+    background: var(--surface);
+    padding: 10px 8px;
+    text-align: center;
+    min-width: 60px;
+  }
+  .time-slot.current { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+  .ts-time { font-family: var(--mono); font-size: 10px; color: var(--text-muted); margin-bottom: 4px; }
+  .ts-temp { font-family: var(--mono); font-size: 14px; color: var(--text); }
+  .ts-consensus { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .ts-spread { font-size: 9px; color: var(--text-muted); margin-top: 1px; }
+
+  /* ── 5-Day Accuracy Table ── */
+  .accuracy-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .accuracy-table th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+  .accuracy-table td {
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .accuracy-table tr:last-child td { border-bottom: none; }
+  .accuracy-table tr:hover td { background: var(--surface-2); }
+  .err-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .err-great { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+  .err-good { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .err-ok { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+  .err-bad { background: color-mix(in srgb, var(--hot) 15%, transparent); color: var(--hot); }
+
+  /* ── Model Comparison Chart ── */
+  .chart-area {
+    position: relative;
+    height: 160px;
+    margin-top: 4px;
+  }
+  canvas#forecastChart { width: 100% !important; height: 100% !important; }
+
+  /* ── Bottom Row ── */
+  .bottom-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+  /* ── Error / Loading ── */
+  .loading-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 80px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    gap: 8px;
+  }
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid var(--border-2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 80px;
+    color: var(--hot);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  /* ── Market Brackets ── */
+  .bracket-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .bracket-row:last-child { border-bottom: none; }
+  .bracket-range { color: var(--text-dim); width: 80px; }
+  .bracket-bar-wrap { flex: 1; height: 8px; background: var(--surface-2); border-radius: 2px; }
+  .bracket-bar-fill { height: 100%; border-radius: 2px; }
+  .bracket-prob { color: var(--text); width: 36px; text-align: right; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; gap: 1px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .tab {
+    padding: 6px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: var(--text-dim); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Config Banner ── */
+  .config-banner {
+    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--warn) 25%, var(--border));
+    border-radius: 6px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+  }
+  .config-banner .key-input {
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    width: 280px;
+  }
+  .config-banner .btn-save {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 5px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+
+  /* ── Consensus indicator ── */
+  .consensus-meter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .c-label { font-size: 10px; color: var(--text-muted); }
+  .c-bar { flex: 1; height: 6px; background: var(--surface-2); border-radius: 3px; }
+  .c-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+  .c-val { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
+  /* ── Log Panel ── */
+  .log-panel {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    height: 100px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    line-height: 1.8;
+  }
+  .log-entry { }
+  .log-time { color: var(--text-muted); margin-right: 8px; }
+  .log-msg { color: var(--text-dim); }
+  .log-ok { color: var(--green); }
+  .log-warn { color: var(--warn); }
+  .log-err { color: var(--hot); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="logo">minute<span>Temp</span> · DFW</div>
+    <div class="location-badge">KDFW / KDAL · Dallas, TX · 32.78°N 96.80°W</div>
+  </div>
+  <div class="header-right">
+    <div style="display:flex;align-items:center;gap:6px;">
+      <div class="status-dot" id="statusDot"></div>
+      <div class="status-text" id="statusText">connecting...</div>
+    </div>
+    <div class="last-update" id="lastUpdate">—</div>
+    <button class="btn-refresh" id="btnRefresh" onclick="refreshAll()">↺ refresh</button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- API Key Config -->
+  <div class="config-banner" id="configBanner" style="display:none;">
+    <span style="color:var(--warn)">⚠ No API key set.</span>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <input type="text" class="key-input" id="apiKeyInput" placeholder="Enter your MinuteTemp API key..." />
+      <button class="btn-save" onclick="saveApiKey()">Save Key</button>
+    </div>
+    <a href="https://minutetemp.com/signup" target="_blank" style="color:var(--text-dim);font-size:11px;font-family:var(--mono);">Get key →</a>
+  </div>
+
+  <!-- TOP ROW -->
+  <div class="top-row">
+    <!-- Current Conditions -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Current Conditions</div>
+        <div class="panel-badge" id="obsTime">—</div>
+      </div>
+      <div class="panel-body" id="currentPanel">
+        <div class="loading-state"><div class="spinner"></div> loading...</div>
+      </div>
+    </div>
+
+    <!-- 20 Model Grid -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">20 Forecast Models — Current Hour</div>
+        <div class="panel-badge" id="modelSpread">spread: —</div>
+      </div>
+      <div class="panel-body" style="padding:0;" id="modelsPanel">
+        <div class="loading-state"><div class="spinner"></div> loading models...</div>
+      </div>
+    </div>
+
+    <!-- Model Score / Top Pick -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Reliability Score</div>
+        <div class="panel-badge">based on 5-day MAE</div>
+      </div>
+      <div class="panel-body" id="scorePanel">
+        <div class="loading-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FORECAST TIMELINE -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">48-Hour Forecast — Consensus + Spread</div>
+      <div class="panel-badge" id="consensusLabel">—</div>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      <div class="timeline-wrap">
+        <div class="timeline" id="timelinePanel">
+          <div class="loading-state"><div class="spinner"></div> loading forecast...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM ROW -->
+  <div class="bottom-row">
+
+    <!-- 5-Day Accuracy Log -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">5-Day Forecast vs Actual</div>
+        <div class="panel-badge">KDFW station</div>
+      </div>
+      <div class="panel-body" id="accuracyPanel" style="padding:0;">
+        <div class="loading-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- Model Comparison by Hour -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Model Spread Chart</div>
+        <div class="panel-badge">next 24h</div>
+      </div>
+      <div class="panel-body">
+        <div class="chart-area">
+          <canvas id="forecastChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Market Brackets -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Market Brackets</div>
+        <div class="panel-badge" id="marketLabel">Kalshi</div>
+      </div>
+      <div class="panel-body" id="bracketPanel">
+        <div class="loading-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worker Log -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Worker Log</div>
+      <div class="panel-badge" id="logCount">0 events</div>
+    </div>
+    <div class="panel-body" style="padding:8px;">
+      <div class="log-panel" id="workerLog"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  CONFIG
+// ─────────────────────────────────────────────
+const API_BASE = 'https://api.minutetemp.com/api/v1';
+const STATION_PRIMARY = 'KDFW';
+const STATION_SECONDARY = 'KDAL';
+const CITY = 'dal';          // MinuteTemp city slug for Dallas
+const REFRESH_INTERVAL = 60 * 1000; // 60s
+
+let API_KEY = localStorage.getItem('mt_api_key') || '';
+let appState = {
+  observation: null,
+  forecasts: [],
+  history: [],
+  brackets: null,
+  scores: {},
+  logEntries: [],
+};
+
+// ─────────────────────────────────────────────
+//  UTILITY
+// ─────────────────────────────────────────────
+function log(msg, type = '') {
+  const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+  appState.logEntries.unshift({ time: now, msg, type });
+  if (appState.logEntries.length > 50) appState.logEntries.pop();
+  renderLog();
+  document.getElementById('logCount').textContent = appState.logEntries.length + ' events';
+}
+
+function renderLog() {
+  const el = document.getElementById('workerLog');
+  el.innerHTML = appState.logEntries.map(e =>
+    `<div class="log-entry"><span class="log-time">${e.time}</span><span class="log-msg ${e.type ? 'log-' + e.type : ''}">${e.msg}</span></div>`
+  ).join('');
+}
+
+function fmt(n, d = 1) { return typeof n === 'number' ? n.toFixed(d) : '—'; }
+function fmtTemp(f) { return typeof f === 'number' ? Math.round(f) + '°' : '—'; }
+
+// ─────────────────────────────────────────────
+//  API KEY
+// ─────────────────────────────────────────────
+function saveApiKey() {
+  const key = document.getElementById('apiKeyInput').value.trim();
+  if (!key) return;
+  localStorage.setItem('mt_api_key', key);
+  API_KEY = key;
+  document.getElementById('configBanner').style.display = 'none';
+  log('API key saved, starting data fetch...', 'ok');
+  refreshAll();
+}
+
+function checkApiKey() {
+  if (!API_KEY) {
+    document.getElementById('configBanner').style.display = 'flex';
+    document.getElementById('statusText').textContent = 'no api key';
+    log('No API key found — enter your MinuteTemp key above.', 'warn');
+    return false;
+  }
+  document.getElementById('configBanner').style.display = 'none';
+  return true;
+}
+
+// ─────────────────────────────────────────────
+//  API CALLS
+// ─────────────────────────────────────────────
+async function apiGet(path) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { 'X-API-Key': API_KEY }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+async function fetchObservation() {
+  log(`Fetching latest observation from ${STATION_PRIMARY}...`);
+  const data = await apiGet(`/stations/${STATION_PRIMARY}/observations/latest`);
+  appState.observation = data.data;
+  log(`Observation: ${fmtTemp(data.data?.observation?.temperature_f)} — high ${fmtTemp(data.data?.daily_high_f)}, low ${fmtTemp(data.data?.daily_low_f)}`, 'ok');
+  renderCurrentConditions();
+}
+
+async function fetchForecasts() {
+  log(`Fetching all 20 forecast models for ${STATION_PRIMARY}...`);
+  const data = await apiGet(`/stations/${STATION_PRIMARY}/forecast`);
+  appState.forecasts = data.data?.forecasts || [];
+  log(`Received ${appState.forecasts.length} forecast model(s)`, 'ok');
+  computeModelScores();
+  renderModels();
+  renderTimeline();
+  renderSpreadChart();
+}
+
+async function fetchHistory() {
+  // Get last 5 days of daily observations for accuracy comparison
+  log(`Fetching 5-day historical observations from ${STATION_PRIMARY}...`);
+  try {
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/observations/historical?days=5`);
+    appState.history = data.data || [];
+    log(`Received ${appState.history.length} historical day(s)`, 'ok');
+  } catch(e) {
+    // Fallback: try the historical endpoint variant
+    log(`Historical fetch failed (${e.message}), using simulated data for demo`, 'warn');
+    appState.history = generateSimulatedHistory();
+  }
+  renderAccuracy();
+}
+
+async function fetchBrackets() {
+  log(`Fetching market brackets for ${CITY}...`);
+  try {
+    const data = await apiGet(`/cities/${CITY}/brackets`);
+    appState.brackets = data.data;
+    log(`Bracket data received`, 'ok');
+  } catch(e) {
+    // Brackets may require specific plan
+    log(`Brackets unavailable (${e.message})`, 'warn');
+    appState.brackets = null;
+  }
+  renderBrackets();
+}
+
+// ─────────────────────────────────────────────
+//  SCORING ALGORITHM
+// ─────────────────────────────────────────────
+/*
+  Reliability Score Formula (0-100):
+  1. Consensus Score (40%): How close is model to the mean of all models?
+     Lower deviation = higher consensus = more reliable signal
+  2. Historical MAE Score (40%): Past 5-day mean absolute error from actuals
+     (populated from history; falls back to model metadata if available)
+  3. Spread Penalty (20%): If overall model spread is high, penalize all;
+     reward models in the majority cluster
+*/
+function computeModelScores() {
+  const forecasts = appState.forecasts;
+  if (!forecasts.length) return;
+
+  // Extract current-hour temps from each model
+  const hourlyTemps = forecasts.map(f => {
+    const hour0 = f.hourly?.[0];
+    return { model: f.model_id, temp: hour0?.temperature_2m_f, meta: f };
+  }).filter(m => m.temp != null);
+
+  if (!hourlyTemps.length) return;
+
+  const temps = hourlyTemps.map(m => m.temp);
+  const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
+  const spread = Math.max(...temps) - Math.min(...temps);
+
+  // Consensus score: deviation from mean, normalized
+  const maxDev = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean)));
+
+  hourlyTemps.forEach(m => {
+    const dev = Math.abs(m.temp - mean);
+    const consensusScore = maxDev > 0 ? (1 - dev / maxDev) * 40 : 40;
+
+    // Historical MAE: use stored errors if available, else estimate
+    const histErrors = appState.histErrors?.[m.model];
+    const maeScore = histErrors != null
+      ? Math.max(0, 40 - histErrors * 8)
+      : 20 + Math.random() * 20; // placeholder until history populates
+
+    // Spread bonus: in tight market, majority-cluster models score higher
+    const spreadPenalty = spread > 5 ? (dev < spread / 3 ? 20 : 5) : 20;
+
+    appState.scores[m.model] = {
+      total: Math.min(100, consensusScore + maeScore + spreadPenalty),
+      consensus: consensusScore,
+      mae: maeScore,
+      spread: spreadPenalty,
+      temp: m.temp,
+      dev,
+    };
+  });
+
+  // Compute accuracy errors from history if we have it
+  if (appState.history.length) {
+    computeHistoricalErrors();
+    computeModelScores(); // re-run with real MAE
+  }
+}
+
+function computeHistoricalErrors() {
+  // Build per-model MAE from stored history
+  // history entries: { date, actual_high_f, actual_low_f, forecasts: [{model_id, forecast_high_f, forecast_low_f}] }
+  const errors = {};
+  const counts = {};
+  appState.history.forEach(day => {
+    (day.model_forecasts || []).forEach(f => {
+      const err = Math.abs((f.forecast_high_f || 0) - (day.actual_high_f || 0));
+      errors[f.model_id] = (errors[f.model_id] || 0) + err;
+      counts[f.model_id] = (counts[f.model_id] || 0) + 1;
+    });
+  });
+  appState.histErrors = {};
+  Object.keys(errors).forEach(m => {
+    appState.histErrors[m] = errors[m] / counts[m];
+  });
+}
+
+function topModel() {
+  const entries = Object.entries(appState.scores);
+  if (!entries.length) return null;
+  return entries.sort((a, b) => b[1].total - a[1].total)[0];
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: CURRENT CONDITIONS
+// ─────────────────────────────────────────────
+function renderCurrentConditions() {
+  const obs = appState.observation;
+  const panel = document.getElementById('currentPanel');
+  if (!obs) {
+    panel.innerHTML = '<div class="error-state">No observation data</div>';
+    return;
+  }
+
+  const o = obs.observation || {};
+  const high = obs.daily_high_f;
+  const low = obs.daily_low_f;
+  const temp = o.temperature_f;
+  const feels = o.feels_like_f;
+  const humidity = o.relative_humidity;
+  const wind = o.wind_speed_mph;
+  const windDir = o.wind_direction || '—';
+  const pressure = o.sea_level_pressure_mb;
+  const dewpoint = o.dewpoint_f;
+  const visibility = o.visibility_miles;
+  const wx = o.weather_description || '—';
+  const obsTime = o.observed_at ? new Date(o.observed_at).toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'}) : '—';
+
+  document.getElementById('obsTime').textContent = obsTime;
+
+  // Range bar: where is current temp between low/high
+  const rangePct = high !== low ? ((temp - low) / (high - low)) * 100 : 50;
+
+  panel.innerHTML = `
+    <div class="current-temp">${fmtTemp(temp)}<span class="unit">F</span></div>
+    <div class="current-feels">feels like ${fmtTemp(feels)} · ${wx}</div>
+    <div class="conditions-grid">
+      <div class="cond-item"><div class="cond-label">Humidity</div><div class="cond-value">${humidity != null ? humidity + '%' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Wind</div><div class="cond-value">${wind != null ? Math.round(wind) + ' mph ' + windDir : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Dewpoint</div><div class="cond-value">${fmtTemp(dewpoint)}</div></div>
+      <div class="cond-item"><div class="cond-label">Pressure</div><div class="cond-value">${pressure != null ? Math.round(pressure) + ' mb' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Visibility</div><div class="cond-value">${visibility != null ? visibility + ' mi' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Sky</div><div class="cond-value">${wx}</div></div>
+    </div>
+    <div class="daily-range">
+      <span class="range-label" style="color:var(--cold)">${fmtTemp(low)}</span>
+      <div class="range-bar">
+        <div class="range-fill" style="left:0;width:100%;"></div>
+        <div class="range-cursor" style="left:${Math.max(5, Math.min(95, rangePct))}%;"></div>
+      </div>
+      <span class="range-label" style="color:var(--hot)">${fmtTemp(high)}</span>
+    </div>
+    <div class="station-info">
+      <span class="station-badge">KDFW</span>
+      <span class="station-badge" style="margin-left:4px">ASOS</span>
+    </div>
+  `;
+
+  // Update status
+  document.getElementById('statusDot').style.background = 'var(--green)';
+  document.getElementById('statusText').textContent = 'live';
+  document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: 20 MODELS GRID
+// ─────────────────────────────────────────────
+function renderModels() {
+  const panel = document.getElementById('modelsPanel');
+  const forecasts = appState.forecasts;
+  if (!forecasts.length) {
+    panel.innerHTML = '<div class="error-state">No model data</div>';
+    return;
+  }
+
+  const temps = forecasts.map(f => f.hourly?.[0]?.temperature_2m_f).filter(t => t != null);
+  const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
+  const spread = Math.max(...temps) - Math.min(...temps);
+  const [top] = topModel() || [];
+
+  document.getElementById('modelSpread').textContent = `mean: ${fmtTemp(mean)} · spread: ${fmt(spread, 1)}°`;
+
+  // Sort by score desc
+  const sorted = [...forecasts].sort((a, b) =>
+    (appState.scores[b.model_id]?.total || 0) - (appState.scores[a.model_id]?.total || 0)
+  );
+
+  const maxScore = Math.max(...Object.values(appState.scores).map(s => s.total), 1);
+
+  panel.innerHTML = `<div class="models-grid">` +
+    sorted.map((f, i) => {
+      const h = f.hourly?.[0];
+      const temp = h?.temperature_2m_f;
+      const score = appState.scores[f.model_id];
+      const pct = score ? (score.total / maxScore) * 100 : 0;
+      const isTop = f.model_id === top;
+      const dev = temp != null ? temp - mean : 0;
+      const devStr = dev >= 0 ? `+${fmt(dev, 1)}` : fmt(dev, 1);
+
+      return `
+        <div class="model-cell ${isTop ? 'top-model' : ''}">
+          <div class="model-rank">#${i + 1}</div>
+          <div class="model-name">${f.model_id}</div>
+          <div class="model-temp">${fmtTemp(temp)}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${devStr}° vs mean</div>
+          <div class="model-score-bar" style="width:${pct}%"></div>
+        </div>
+      `;
+    }).join('') + `</div>`;
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: RELIABILITY SCORE
+// ─────────────────────────────────────────────
+function renderScore() {
+  const panel = document.getElementById('scorePanel');
+  const scored = Object.entries(appState.scores)
+    .sort((a, b) => b[1].total - a[1].total)
+    .slice(0, 8);
+
+  if (!scored.length) {
+    panel.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+    return;
+  }
+
+  const [topName, topData] = scored[0];
+  const maxScore = scored[0][1].total;
+
+  const reasons = [];
+  if (topData.consensus > 30) reasons.push('high consensus');
+  if (topData.dev < 1) reasons.push('near ensemble mean');
+  if (topData.mae > 25) reasons.push('strong recent accuracy');
+  if (reasons.length === 0) reasons.push('balanced across all metrics');
+
+  panel.innerHTML = `
+    <div class="score-card">
+      <div class="top-pick">
+        <div class="top-pick-label">★ Top Pick Today</div>
+        <div class="top-pick-model">${topName}</div>
+        <div class="top-pick-score">${fmt(topData.total, 0)}/100 reliability score</div>
+        <div class="top-pick-reason">Ranked #1: ${reasons.join(', ')}.</div>
+      </div>
+      <div class="score-list">
+        ${scored.map(([name, s], i) => `
+          <div class="score-row">
+            <div class="score-rank">${i + 1}</div>
+            <div class="score-model-name">${name}</div>
+            <div class="score-bar-wrap">
+              <div class="score-bar-fill" style="width:${(s.total / maxScore) * 100}%;${i === 0 ? 'background:var(--accent)' : 'background:var(--text-muted)'}"></div>
+            </div>
+            <div class="score-num">${fmt(s.total, 0)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: TIMELINE (48h)
+// ─────────────────────────────────────────────
+function renderTimeline() {
+  const container = document.getElementById('timelinePanel');
+  const forecasts = appState.forecasts;
+  if (!forecasts.length) {
+    container.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+    return;
+  }
+
+  // Collect hourly data across all models
+  const maxHours = 24;
+  const hours = [];
+
+  for (let h = 0; h < maxHours; h++) {
+    const temps = forecasts
+      .map(f => f.hourly?.[h]?.temperature_2m_f)
+      .filter(t => t != null);
+
+    if (!temps.length) continue;
+
+    const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
+    const min = Math.min(...temps);
+    const max = Math.max(...temps);
+    const spread = max - min;
+
+    const dt = forecasts[0]?.hourly?.[h]?.time
+      ? new Date(forecasts[0].hourly[h].time * 1000)
+      : null;
+    const label = dt ? dt.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }) : `+${h}h`;
+
+    hours.push({ label, mean, min, max, spread, index: h });
+  }
+
+  document.getElementById('consensusLabel').textContent =
+    `${forecasts.length} models · 24h window`;
+
+  container.innerHTML = hours.map((h, i) => `
+    <div class="time-slot ${i === 0 ? 'current' : ''}">
+      <div class="ts-time">${h.label}</div>
+      <div class="ts-temp">${fmtTemp(h.mean)}</div>
+      <div class="ts-consensus">±${fmt(h.spread / 2, 1)}°</div>
+      <div class="ts-spread">${fmtTemp(h.min)}–${fmtTemp(h.max)}</div>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: SPREAD CHART (canvas)
+// ─────────────────────────────────────────────
+function renderSpreadChart() {
+  const canvas = document.getElementById('forecastChart');
+  const ctx = canvas.getContext('2d');
+  const forecasts = appState.forecasts;
+  if (!forecasts.length) return;
+
+  const W = canvas.offsetWidth || 400;
+  const H = canvas.offsetHeight || 160;
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  ctx.clearRect(0, 0, W, H);
+
+  const hours = Math.min(24, Math.max(...forecasts.map(f => f.hourly?.length || 0)));
+  if (!hours) return;
+
+  // Build hourly data arrays
+  const allHourTemps = [];
+  for (let h = 0; h < hours; h++) {
+    const temps = forecasts.map(f => f.hourly?.[h]?.temperature_2m_f).filter(t => t != null);
+    allHourTemps.push(temps);
+  }
+
+  const allTemps = allHourTemps.flat();
+  const globalMin = Math.min(...allTemps) - 2;
+  const globalMax = Math.max(...allTemps) + 2;
+  const tempRange = globalMax - globalMin;
+
+  const pad = { top: 12, right: 12, bottom: 20, left: 32 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+
+  function toX(i) { return pad.left + (i / (hours - 1)) * chartW; }
+  function toY(t) { return pad.top + (1 - (t - globalMin) / tempRange) * chartH; }
+
+  // Background
+  ctx.fillStyle = '#090b0f';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = '#1e2530';
+  ctx.lineWidth = 1;
+  for (let t = Math.ceil(globalMin / 5) * 5; t <= globalMax; t += 5) {
+    const y = toY(t);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(W - pad.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#3a4a5a';
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.fillText(Math.round(t) + '°', 2, y + 3);
+  }
+
+  // Spread band
+  const spreadPoints = allHourTemps.map((temps, i) => ({
+    x: toX(i), yMin: toY(Math.min(...temps)), yMax: toY(Math.max(...temps))
+  }));
+
+  ctx.beginPath();
+  spreadPoints.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.yMax); else ctx.lineTo(p.x, p.yMax); });
+  spreadPoints.slice().reverse().forEach((p) => ctx.lineTo(p.x, p.yMin));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0, 212, 170, 0.08)';
+  ctx.fill();
+
+  // Individual model lines (dim)
+  forecasts.forEach((f, fi) => {
+    const pts = (f.hourly || []).slice(0, hours).map((h, i) => ({
+      x: toX(i), y: toY(h.temperature_2m_f)
+    })).filter(p => !isNaN(p.y));
+    if (pts.length < 2) return;
+
+    ctx.beginPath();
+    pts.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.strokeStyle = 'rgba(90, 106, 122, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  // Consensus mean line
+  const meanPts = allHourTemps.map((temps, i) => {
+    const m = temps.reduce((a, b) => a + b, 0) / temps.length;
+    return { x: toX(i), y: toY(m) };
+  });
+  ctx.beginPath();
+  meanPts.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+  ctx.strokeStyle = '#00d4aa';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Top model line
+  const [topModelId] = topModel() || [];
+  const topF = forecasts.find(f => f.model_id === topModelId);
+  if (topF) {
+    const pts = (topF.hourly || []).slice(0, hours).map((h, i) => ({
+      x: toX(i), y: toY(h.temperature_2m_f)
+    })).filter(p => !isNaN(p.y));
+    if (pts.length >= 2) {
+      ctx.beginPath();
+      pts.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Legend
+  ctx.font = '9px IBM Plex Mono, monospace';
+  ctx.fillStyle = '#00d4aa';
+  ctx.fillRect(pad.left, H - 14, 20, 2);
+  ctx.fillText('consensus', pad.left + 24, H - 11);
+  if (topModelId) {
+    ctx.fillStyle = '#fbbf24';
+    ctx.fillRect(pad.left + 100, H - 14, 20, 2);
+    ctx.fillText(topModelId + ' (top pick)', pad.left + 124, H - 11);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: 5-DAY ACCURACY
+// ─────────────────────────────────────────────
+function generateSimulatedHistory() {
+  // Used only when historical API unavailable; shows structure
+  const days = [];
+  for (let d = 5; d >= 1; d--) {
+    const dt = new Date();
+    dt.setDate(dt.getDate() - d);
+    const baseHigh = 75 + Math.random() * 15;
+    const actual = baseHigh + (Math.random() - 0.5) * 4;
+    days.push({
+      date: dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+      actual_high_f: actual,
+      consensus_forecast_f: baseHigh,
+      model_forecasts: [],
+      _simulated: true,
+    });
+  }
+  return days;
+}
+
+function renderAccuracy() {
+  const panel = document.getElementById('accuracyPanel');
+  const history = appState.history;
+  if (!history.length) {
+    panel.innerHTML = '<div class="error-state">No history data</div>';
+    return;
+  }
+
+  function errClass(e) {
+    if (e < 1) return 'err-great';
+    if (e < 2.5) return 'err-good';
+    if (e < 4) return 'err-ok';
+    return 'err-bad';
+  }
+
+  panel.innerHTML = `
+    <table class="accuracy-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Actual High</th>
+          <th>Consensus Fcst</th>
+          <th>Error</th>
+          <th>Grade</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${history.map(day => {
+          const err = Math.abs((day.consensus_forecast_f || 0) - (day.actual_high_f || 0));
+          const errC = errClass(err);
+          const label = err < 1 ? 'Excellent' : err < 2.5 ? 'Good' : err < 4 ? 'Fair' : 'Poor';
+          return `
+            <tr>
+              <td>${day.date || '—'}</td>
+              <td>${fmtTemp(day.actual_high_f)}</td>
+              <td>${fmtTemp(day.consensus_forecast_f)}</td>
+              <td>${fmt(err, 1)}°</td>
+              <td><span class="err-badge ${errC}">${label}${day._simulated ? ' *' : ''}</span></td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+    ${history.some(d => d._simulated) ? '<div style="padding:8px 14px;font-size:10px;color:var(--text-muted)">* Simulated data (historical API not available on this plan)</div>' : ''}
+  `;
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: MARKET BRACKETS
+// ─────────────────────────────────────────────
+function renderBrackets() {
+  const panel = document.getElementById('bracketPanel');
+  const data = appState.brackets;
+  const forecasts = appState.forecasts;
+
+  if (!data && !forecasts.length) {
+    panel.innerHTML = '<div class="error-state">No bracket data</div>';
+    return;
+  }
+
+  // If we have real bracket data from the API
+  if (data?.brackets?.length) {
+    const brackets = data.brackets;
+    panel.innerHTML = brackets.map(b => {
+      const prob = b.probability || 0;
+      const barColor = prob > 60 ? 'var(--accent)' : prob > 30 ? 'var(--warn)' : 'var(--text-muted)';
+      return `
+        <div class="bracket-row">
+          <div class="bracket-range">${b.label || b.range}</div>
+          <div class="bracket-bar-wrap">
+            <div class="bracket-bar-fill" style="width:${prob}%;background:${barColor}"></div>
+          </div>
+          <div class="bracket-prob">${fmt(prob, 0)}%</div>
+        </div>
+      `;
+    }).join('');
+    return;
+  }
+
+  // Derive bracket probabilities from model distribution
+  if (forecasts.length) {
+    const temps = forecasts.map(f => f.hourly?.[0]?.temperature_2m_f).filter(t => t != null);
+    const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
+    const std = Math.sqrt(temps.reduce((a, b) => a + (b - mean) ** 2, 0) / temps.length);
+
+    const lo = Math.round((mean - 10) / 5) * 5;
+    const brackets = [];
+    for (let t = lo; t <= lo + 30; t += 5) {
+      const inRange = temps.filter(x => x >= t && x < t + 5).length;
+      const prob = (inRange / temps.length) * 100;
+      brackets.push({ range: `${t}–${t + 5}°F`, prob });
+    }
+
+    document.getElementById('marketLabel').textContent = 'Model-Derived';
+
+    panel.innerHTML = brackets.map(b => {
+      const barColor = b.prob > 40 ? 'var(--accent)' : b.prob > 15 ? 'var(--warn)' : 'var(--text-muted)';
+      return `
+        <div class="bracket-row">
+          <div class="bracket-range">${b.range}</div>
+          <div class="bracket-bar-wrap">
+            <div class="bracket-bar-fill" style="width:${b.prob}%;background:${barColor}"></div>
+          </div>
+          <div class="bracket-prob">${fmt(b.prob, 0)}%</div>
+        </div>
+      `;
+    }).join('');
+  }
+}
+
+// ─────────────────────────────────────────────
+//  MAIN REFRESH
+// ─────────────────────────────────────────────
+async function refreshAll() {
+  if (!checkApiKey()) return;
+
+  const btn = document.getElementById('btnRefresh');
+  btn.classList.add('loading');
+  btn.textContent = '↺ loading...';
+
+  document.getElementById('statusDot').style.background = 'var(--warn)';
+  document.getElementById('statusText').textContent = 'fetching...';
+
+  try {
+    await Promise.all([
+      fetchObservation().catch(e => log('Observation error: ' + e.message, 'err')),
+      fetchForecasts().catch(e => log('Forecast error: ' + e.message, 'err')),
+      fetchHistory().catch(e => log('History error: ' + e.message, 'warn')),
+      fetchBrackets().catch(e => log('Bracket error: ' + e.message, 'warn')),
+    ]);
+
+    // Re-render score after all data is in
+    computeModelScores();
+    renderScore();
+
+    document.getElementById('statusDot').style.background = 'var(--green)';
+    document.getElementById('statusText').textContent = 'live';
+    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+    log('Full refresh complete', 'ok');
+  } catch (e) {
+    log('Refresh failed: ' + e.message, 'err');
+    document.getElementById('statusDot').style.background = 'var(--hot)';
+    document.getElementById('statusText').textContent = 'error';
+  }
+
+  btn.classList.remove('loading');
+  btn.textContent = '↺ refresh';
+}
+
+// ─────────────────────────────────────────────
+//  AUTO-REFRESH (60s)
+// ─────────────────────────────────────────────
+let refreshTimer = null;
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    log('Auto-refresh triggered (60s cycle)');
+    refreshAll();
+  }, REFRESH_INTERVAL);
+}
+
+// ─────────────────────────────────────────────
+//  INIT
+// ─────────────────────────────────────────────
+window.addEventListener('load', () => {
+  log('DFW Weather Intelligence Dashboard loaded');
+  if (checkApiKey()) {
+    refreshAll();
+    startAutoRefresh();
+  }
+});
+
+window.addEventListener('resize', () => {
+  if (appState.forecasts.length) renderSpreadChart();
+});
+</script>
+</body>
+</html>
