@@ -692,7 +692,13 @@ async function fetchHistory() {
   try {
     const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history?type=cli`);
     const reports = data.data?.reports || [];
-    appState.history = reports.slice(0, 5).map(r => ({
+    const seen = new Set();
+const unique = reports.filter(r => {
+  if (seen.has(r.report_date)) return false;
+  seen.add(r.report_date);
+  return true;
+});
+appState.history = unique.slice(0, 5).map(r => ({
       date: r.report_date,
       actual_high_f: r.max_temp_f,
       consensus_forecast_f: null,
