@@ -686,7 +686,6 @@ async function fetchForecasts() {
   renderTimeline();
   renderSpreadChart();
   }
-}
 
 async function fetchHistory() {
   // Get last 5 days of daily observations for accuracy comparison
@@ -772,7 +771,7 @@ function computeModelScores() {
   });
 
   // Compute accuracy errors from history if we have it
-  if (appState.history.length && !appState.histErrors) {
+if (appState.history.length && !appState.histErrors) {
     computeHistoricalErrors();
   }
 }
