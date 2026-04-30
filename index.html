@@ -986,7 +986,102 @@ function renderScore() {
     </div>
   `;
 }
+// ─────────────────────────────────────────────
+//  RENDER: CURRENT CONDITIONS
+// ─────────────────────────────────────────────
+function renderCurrentConditions() {
+  const obs = appState.observation;
+  if (!obs) return;
+  const o = obs.observation || {};
+  const condition = appState.currentCondition || detectCondition(obs, appState.weatherEvents);
+  const cInfo = CONDITION_LABELS[condition] || CONDITION_LABELS.unknown;
 
+  const el = document.getElementById('currentConditions');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="font-size:28px">${cInfo.icon}</div>
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)">${cInfo.label}</div>
+        <div style="font-size:11px;color:var(--text-dim);font-family:var(--mono)">
+          ${o.text_description || ''}
+          ${o.wind_speed != null ? ` · Wind ${Math.round(o.wind_speed)}kt` : ''}
+          ${o.wind_direction != null ? ` @ ${Math.round(o.wind_direction)}°` : ''}
+          ${o.wind_gust != null ? ` (gust ${Math.round(o.wind_gust)}kt)` : ''}
+        </div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">
+          ${(appState.weatherEvents?.active || []).map(e => e.name || e.event_type).join(' · ') || 'No active weather events'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ─────────────────────────────────────────────
+//  RENDER: MODELS TABLE
+// ─────────────────────────────────────────────
+function renderModels() {
+  const panel = document.getElementById('modelsPanel');
+  if (!panel) return;
+
+  const forecasts = appState.forecasts;
+  const scores = appState.conditionScores;
+  const baseScores = appState.scores;
+
+  if (!forecasts.length) {
+    panel.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+    return;
+  }
+
+  const hasCond = Object.keys(scores).length > 0;
+  const ranked = forecasts.map(f => {
+    const id = f.model_id;
+    const temp = f.hourly?.[0]?.temperature_2m_f ?? null;
+    const cs = hasCond ? scores[id] : null;
+    const bs = baseScores[id] || {};
+    return {
+      id,
+      name: cs?.name || id,
+      temp,
+      score: cs?.score ?? bs.total ?? 0,
+      mae: cs?.mae ?? bs.mae_actual ?? null,
+      bias: cs?.bias ?? bs.bias ?? null,
+      dev: bs.dev ?? null,
+    };
+  }).sort((a, b) => b.score - a.score);
+
+  const biasStr = (b) => b == null ? '—' : (b > 0 ? `+${b.toFixed(1)}°` : `${b.toFixed(1)}°`);
+  const maeStr = (m) => m == null ? '—' : `${m.toFixed(2)}°`;
+
+  panel.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono)">
+      <thead>
+        <tr style="color:var(--text-muted);border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px">#</th>
+          <th style="text-align:left;padding:4px 6px">Model</th>
+          <th style="text-align:right;padding:4px 6px">Temp</th>
+          <th style="text-align:right;padding:4px 6px">MAE</th>
+          <th style="text-align:right;padding:4px 6px">Bias</th>
+          <th style="text-align:right;padding:4px 6px">Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ranked.map((m, i) => `
+          <tr style="border-bottom:1px solid var(--border-subtle);${i===0?'color:var(--accent)':''}">
+            <td style="padding:4px 6px;color:var(--text-muted)">${i + 1}</td>
+            <td style="padding:4px 6px">${m.name}</td>
+            <td style="padding:4px 6px;text-align:right">${m.temp != null ? fmtTemp(m.temp) : '—'}</td>
+            <td style="padding:4px 6px;text-align:right">${maeStr(m.mae)}</td>
+            <td style="padding:4px 6px;text-align:right;color:${(m.bias??0)>0?'var(--hot)':'var(--cold)'}">${biasStr(m.bias)}</td>
+            <td style="padding:4px 6px;text-align:right;color:var(--gold)">${m.score}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+  
 // ─────────────────────────────────────────────
 //  RENDER: TIMELINE (48h)
 // ─────────────────────────────────────────────
