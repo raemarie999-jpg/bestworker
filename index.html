@@ -692,7 +692,12 @@ async function fetchHistory() {
   log(`Fetching 5-day historical observations from ${STATION_PRIMARY}...`);
   try {
     const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history`);
-    appState.history = data.data?.reports || [];
+    appState.history = (data.data?.reports || []).map(r => ({
+  date: r.report_date,
+  actual_high_f: r.max_temp_f,
+  consensus_forecast_f: null,
+  model_forecasts: [],
+}));
     log(`Received ${appState.history.length} historical day(s)`, 'ok');
   } catch(e) {
     // Fallback: try the historical endpoint variant
