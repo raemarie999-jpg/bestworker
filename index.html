@@ -688,19 +688,19 @@ async function fetchForecasts() {
   }
 
 async function fetchHistory() {
-  // Get last 5 days of daily observations for accuracy comparison
   log(`Fetching 5-day historical observations from ${STATION_PRIMARY}...`);
   try {
-    const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history`);
-    appState.history = (data.data?.reports || []).map(r => ({
-  date: r.report_date,
-  actual_high_f: r.max_temp_f,
-  consensus_forecast_f: null,
-  model_forecasts: [],
-}));
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/reports/history?type=cli`);
+    const reports = data.data?.reports || [];
+    appState.history = reports.slice(0, 5).map(r => ({
+      date: r.report_date,
+      actual_high_f: r.max_temp_f,
+      consensus_forecast_f: null,
+      model_forecasts: [],
+    }));
+    if (!appState.history.length) throw new Error('No CLI reports found');
     log(`Received ${appState.history.length} historical day(s)`, 'ok');
   } catch(e) {
-    // Fallback: try the historical endpoint variant
     log(`Historical fetch failed (${e.message}), using simulated data for demo`, 'warn');
     appState.history = generateSimulatedHistory();
   }
