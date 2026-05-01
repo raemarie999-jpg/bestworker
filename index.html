@@ -469,7 +469,7 @@
   .hl-err-2 { color: var(--warn) !important; }
   .hl-err-3 { color: var(--hot) !important; }
   .hl-na { color: var(--text-muted) !important; }
-  .hl-chart-wrap { position: relative; height: 180px; margin-top: 4px; }
+  .hl-chart-wrap { position: relative; height: 320px; margin-top: 4px; }
   .day-selector {
     display: flex;
     gap: 4px;
@@ -636,16 +636,16 @@
       <div class="panel-badge" id="hlBadge">loading...</div>
     </div>
     <div class="day-selector" id="hlDaySelector"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--border);margin-top:10px;">
-      <div style="border-right:1px solid var(--border);">
+    <div style="display:grid;grid-template-columns:1fr;gap:0;border-top:1px solid var(--border);margin-top:10px;">
+      <div>
         <div style="padding:8px 14px;font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.5px;">Forecasted High vs Actual — by Run</div>
         <div style="overflow-x:auto;">
           <div id="hlTablePanel"><div class="loading-state"><div class="spinner"></div></div></div>
         </div>
       </div>
-      <div>
+      <div style="border-top:1px solid var(--border);">
         <div style="padding:8px 14px;font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.5px;">Forecast Drift Chart — High Temp</div>
-        <div class="hl-chart-wrap" style="padding:0 14px 14px;">
+        <div class="hl-chart-wrap" style="padding:0 14px 14px;height:320px;">
           <canvas id="hlChart"></canvas>
         </div>
       </div>
@@ -1642,8 +1642,8 @@ function renderHLChart() {
   const day = appState.hlDays.find(d => d.date === appState.hlSelectedDay);
   if (!day) return;
 
-  const W = canvas.offsetWidth || 500;
-  const H = canvas.offsetHeight || 180;
+  const W = canvas.offsetWidth || 800;
+  const H = canvas.offsetHeight || 320;
   canvas.width = W * window.devicePixelRatio;
   canvas.height = H * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
