@@ -687,6 +687,8 @@ let appState = {
   conditionScores: {},
   currentCondition: 'unknown',
   logEntries: [],
+  hlDays: [],
+  hlSelectedDay: null,
 };
 
 // ─────────────────────────────────────────────
@@ -1457,6 +1459,263 @@ function renderBrackets() {
 }
 
 // ─────────────────────────────────────────────
+//  HIGH/LOW ACCURACY — FETCHER
+// ─────────────────────────────────────────────
+async function fetchHLAccuracy() {
+  log('Fetching high/low forecast accuracy data...');
+  try {
+    const rptData = await apiGet(`/stations/${STATION_PRIMARY}/reports/history?type=cli`);
+    const reports = rptData.data?.reports || [];
+    const seen = new Set();
+    const uniqueReports = reports.filter(r => {
+      if (seen.has(r.report_date)) return false;
+      seen.add(r.report_date);
+      return true;
+    }).slice(0, 5);
+
+    if (!uniqueReports.length) { log('No CLI reports for H/L accuracy', 'warn'); return; }
+
+    const RUN_SLOTS = [
+      { label: '12h prior', minH: 10, maxH: 14 },
+      { label: '8h prior',  minH: 6,  maxH: 10 },
+      { label: '4h prior',  minH: 2,  maxH: 6  },
+      { label: 'Day-of',    minH: -2, maxH: 2  },
+    ];
+
+    const days = [];
+
+    for (const rpt of uniqueReports) {
+      const dateStr = rpt.report_date;
+      // Dallas CT: UTC-6 standard, UTC-5 daylight. Use noon UTC as safe proxy for local midnight
+      const dayStart = new Date(dateStr + 'T06:00:00Z');
+      const windowStart = new Date(dayStart.getTime() - 14 * 3600000);
+      const windowEnd   = new Date(dayStart.getTime() + 24 * 3600000);
+
+      let allRuns = [];
+      try {
+        const runsData = await apiGet(
+          `/stations/${STATION_PRIMARY}/forecast/runs?start=${windowStart.toISOString()}&end=${windowEnd.toISOString()}&limit=200`
+        );
+        allRuns = runsData.data?.runs || [];
+      } catch(e) { log(`Run fetch failed for ${dateStr}: ${e.message}`, 'warn'); }
+
+      const modelIds = [...new Set(allRuns.map(r => r.model_id))];
+      const slotRuns = [];
+
+      for (const slot of RUN_SLOTS) {
+        const targetH = (slot.minH + slot.maxH) / 2;
+        const models = {};
+
+        for (const modelId of modelIds) {
+          const modelRuns = allRuns.filter(r => r.model_id === modelId);
+          let best = null, bestDiff = Infinity;
+          for (const run of modelRuns) {
+            const hoursOut = (dayStart - new Date(run.fetched_at)) / 3600000;
+            if (hoursOut >= slot.minH && hoursOut < slot.maxH) {
+              const diff = Math.abs(hoursOut - targetH);
+              if (diff < bestDiff) { bestDiff = diff; best = run; }
+            }
+          }
+          if (best) {
+            try {
+              const rd = await apiGet(`/stations/${STATION_PRIMARY}/forecast/runs/${best.id}`);
+              const hourly = rd.data?.hourly || [];
+              const dayTemps = hourly
+                .filter(h => { const t = new Date(h.time); return t >= dayStart && t < windowEnd; })
+                .map(h => h.temperature_2m_f)
+                .filter(t => t != null);
+              if (dayTemps.length) {
+                models[modelId] = {
+                  forecastHigh: Math.max(...dayTemps),
+                  forecastLow: Math.min(...dayTemps),
+                };
+              }
+            } catch(e) { /* skip */ }
+          }
+        }
+        slotRuns.push({ label: slot.label, models });
+      }
+
+      days.push({
+        date: dateStr,
+        actualHigh: rpt.max_temp_f,
+        actualLow: rpt.min_temp_f,
+        runs: slotRuns,
+      });
+    }
+
+    appState.hlDays = days;
+    appState.hlSelectedDay = days[0]?.date || null;
+    log(`H/L accuracy: ${days.length} day(s) loaded`, 'ok');
+    document.getElementById('hlBadge').textContent = `${days.length} days · click a date below`;
+    renderHLDaySelector();
+    renderHLTable();
+    renderHLChart();
+
+  } catch(e) {
+    log('H/L accuracy fetch failed: ' + e.message, 'warn');
+    document.getElementById('hlBadge').textContent = 'unavailable';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  HIGH/LOW ACCURACY — DAY SELECTOR
+// ─────────────────────────────────────────────
+function renderHLDaySelector() {
+  const el = document.getElementById('hlDaySelector');
+  if (!el || !appState.hlDays.length) return;
+  el.innerHTML = appState.hlDays.map(d => `
+    <button class="day-btn ${d.date === appState.hlSelectedDay ? 'active' : ''}"
+      onclick="selectHLDay('${d.date}')">${d.date}</button>
+  `).join('');
+}
+
+function selectHLDay(date) {
+  appState.hlSelectedDay = date;
+  renderHLDaySelector();
+  renderHLTable();
+  renderHLChart();
+}
+
+// ─────────────────────────────────────────────
+//  HIGH/LOW ACCURACY — TABLE
+// ─────────────────────────────────────────────
+function renderHLTable() {
+  const el = document.getElementById('hlTablePanel');
+  if (!el) return;
+  const day = appState.hlDays.find(d => d.date === appState.hlSelectedDay);
+  if (!day) { el.innerHTML = '<div class="loading-state" style="height:60px">Select a date</div>'; return; }
+
+  const modelIds = [...new Set(day.runs.flatMap(r => Object.keys(r.models)))].sort();
+
+  function errClass(err) {
+    if (err == null) return 'hl-na';
+    const a = Math.abs(err);
+    if (a < 1)   return 'hl-err-0';
+    if (a < 2.5) return 'hl-err-1';
+    if (a < 4)   return 'hl-err-2';
+    return 'hl-err-3';
+  }
+
+  function cellHTML(run, id, actual) {
+    const m = run.models[id];
+    if (!m || actual == null) return `<td class="hl-na">—</td>`;
+    const err = m.forecastHigh - actual;
+    const errStr = (err >= 0 ? '+' : '') + err.toFixed(1) + '°';
+    return `<td class="${errClass(err)}">${Math.round(m.forecastHigh)}° <span style="font-size:9px;opacity:0.8">${errStr}</span></td>`;
+  }
+
+  el.innerHTML = `
+    <table class="hl-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          ${day.runs.map(r => `<th>${r.label}</th>`).join('')}
+        </tr>
+        <tr>
+          <th style="color:var(--accent)">Actual: ${day.actualHigh != null ? Math.round(day.actualHigh) + '°F' : '—'}</th>
+          ${day.runs.map(() => `<th style="color:var(--text-muted);font-size:9px">fcst / err</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${modelIds.map(id => `
+          <tr>
+            <td>${id}</td>
+            ${day.runs.map(run => cellHTML(run, id, day.actualHigh)).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ─────────────────────────────────────────────
+//  HIGH/LOW ACCURACY — DRIFT CHART
+// ─────────────────────────────────────────────
+function renderHLChart() {
+  const canvas = document.getElementById('hlChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const day = appState.hlDays.find(d => d.date === appState.hlSelectedDay);
+  if (!day) return;
+
+  const W = canvas.offsetWidth || 500;
+  const H = canvas.offsetHeight || 180;
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#090b0f';
+  ctx.fillRect(0, 0, W, H);
+
+  const modelIds = [...new Set(day.runs.flatMap(r => Object.keys(r.models)))].sort();
+  const runLabels = day.runs.map(r => r.label);
+
+  const allVals = [];
+  modelIds.forEach(id => day.runs.forEach(run => { if (run.models[id]) allVals.push(run.models[id].forecastHigh); }));
+  if (day.actualHigh != null) allVals.push(day.actualHigh);
+  if (!allVals.length) return;
+
+  const yMin = Math.min(...allVals) - 3;
+  const yMax = Math.max(...allVals) + 3;
+  const yRange = yMax - yMin || 1;
+
+  const pad = { top: 16, right: 80, bottom: 28, left: 36 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const toX = i => pad.left + (i / Math.max(runLabels.length - 1, 1)) * cW;
+  const toY = v => pad.top + (1 - (v - yMin) / yRange) * cH;
+
+  // Grid
+  ctx.strokeStyle = '#1e2530'; ctx.lineWidth = 1;
+  for (let t = Math.ceil(yMin / 2) * 2; t <= yMax; t += 2) {
+    const y = toY(t);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#3a4a5a'; ctx.font = '9px IBM Plex Mono,monospace'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(t) + '°', pad.left - 4, y + 3);
+  }
+
+  // X labels
+  runLabels.forEach((label, i) => {
+    ctx.fillStyle = '#3a4a5a'; ctx.font = '9px IBM Plex Mono,monospace'; ctx.textAlign = 'center';
+    ctx.fillText(label, toX(i), H - 6);
+  });
+
+  // Model lines
+  const palette = ['#60a5fa','#f59e0b','#a78bfa','#34d399','#fb7185','#38bdf8','#fbbf24','#c084fc',
+                   '#4ade80','#f472b6','#818cf8','#fb923c','#22d3ee','#e879f9','#a3e635','#94a3b8'];
+  modelIds.forEach((id, mi) => {
+    const pts = day.runs.map((run, i) => run.models[id] ? { x: toX(i), y: toY(run.models[id].forecastHigh) } : null);
+    const valid = pts.filter(Boolean);
+    if (valid.length < 1) return;
+
+    ctx.beginPath();
+    valid.forEach((p, vi) => { if (vi === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.strokeStyle = palette[mi % palette.length] + '70';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Label at last point
+    const last = valid[valid.length - 1];
+    ctx.fillStyle = palette[mi % palette.length] + 'cc';
+    ctx.font = '8px IBM Plex Mono,monospace'; ctx.textAlign = 'left';
+    ctx.fillText(id, last.x + 4, last.y + 3);
+  });
+
+  // Actual high line
+  if (day.actualHigh != null) {
+    const ay = toY(day.actualHigh);
+    ctx.beginPath(); ctx.setLineDash([6, 3]);
+    ctx.moveTo(pad.left, ay); ctx.lineTo(W - pad.right, ay);
+    ctx.strokeStyle = '#00d4aa'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#00d4aa'; ctx.font = 'bold 10px IBM Plex Mono,monospace'; ctx.textAlign = 'left';
+    ctx.fillText('Actual ' + Math.round(day.actualHigh) + '°', W - pad.right + 4, ay + 3);
+  }
+}
+
+// ─────────────────────────────────────────────
 //  MAIN REFRESH
 // ─────────────────────────────────────────────
 async function refreshAll() {
@@ -1477,6 +1736,7 @@ async function refreshAll() {
       fetchBrackets().catch(e => log('Bracket error: ' + e.message, 'warn')),
       fetchOracleScores().catch(e => log('Oracle error: ' + e.message, 'warn')),
       fetchWeatherEvents().catch(e => log('Events error: ' + e.message, 'warn')),
+      fetchHLAccuracy().catch(e => log('H/L accuracy error: ' + e.message, 'warn')),
     ]);
 
     computeModelScores();
@@ -1522,6 +1782,7 @@ window.addEventListener('load', () => {
 
 window.addEventListener('resize', () => {
   if (appState.forecasts.length) renderSpreadChart();
+  if (appState.hlDays.length) renderHLChart();
 });
 </script>
 </body>
