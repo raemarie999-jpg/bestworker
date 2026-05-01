@@ -68,7 +68,6 @@
   .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   .status-text { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
-
   .last-update { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
 
   .btn-refresh {
@@ -437,6 +436,60 @@
   .c-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
   .c-val { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
 
+  /* ── High/Low Accuracy Panel ── */
+  .hl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 10px;
+  }
+  .hl-table th {
+    padding: 5px 7px;
+    color: var(--text-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .hl-table th:first-child { text-align: left; }
+  .hl-table td {
+    padding: 5px 7px;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+    color: var(--text-dim);
+  }
+  .hl-table td:first-child { text-align: left; color: var(--text); }
+  .hl-table tr:last-child td { border-bottom: none; }
+  .hl-table tr:hover td { background: var(--surface-2); }
+  .hl-err-0 { color: var(--green) !important; }
+  .hl-err-1 { color: var(--accent) !important; }
+  .hl-err-2 { color: var(--warn) !important; }
+  .hl-err-3 { color: var(--hot) !important; }
+  .hl-na { color: var(--text-muted) !important; }
+  .hl-chart-wrap { position: relative; height: 180px; margin-top: 4px; }
+  .day-selector {
+    display: flex;
+    gap: 4px;
+    padding: 10px 14px 0;
+    flex-wrap: wrap;
+  }
+  .day-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border-2);
+    color: var(--text-dim);
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 10px;
+    transition: all 0.1s;
+  }
+  .day-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .day-btn.active { background: color-mix(in srgb, var(--accent) 15%, var(--surface-2)); border-color: var(--accent); color: var(--accent); }
+
   /* ── Log Panel ── */
   .log-panel {
     background: var(--bg);
@@ -510,7 +563,7 @@
       </div>
     </div>
 
-    <!-- Model Score / Top Pick -->
+    <!-- Condition-Aware Model Intel -->
     <div class="panel">
       <div class="panel-header">
         <div class="panel-title">Condition-Aware Model Intel</div>
@@ -540,17 +593,6 @@
   <!-- BOTTOM ROW -->
   <div class="bottom-row">
 
-    <!-- 5-Day Accuracy Log -->
-    <div class="panel">
-      <div class="panel-header">
-        <div class="panel-title">5-Day Forecast vs Actual</div>
-        <div class="panel-badge">KDFW station</div>
-      </div>
-      <div class="panel-body" id="accuracyPanel" style="padding:0;">
-        <div class="loading-state"><div class="spinner"></div></div>
-      </div>
-    </div>
-
     <!-- Model Comparison by Hour -->
     <div class="panel">
       <div class="panel-header">
@@ -564,6 +606,17 @@
       </div>
     </div>
 
+    <!-- 5-Day Accuracy Log -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">5-Day Forecast vs Actual</div>
+        <div class="panel-badge">KDFW · CLI reports</div>
+      </div>
+      <div class="panel-body" id="accuracyPanel" style="padding:0;">
+        <div class="loading-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+
     <!-- Market Brackets -->
     <div class="panel">
       <div class="panel-header">
@@ -572,6 +625,29 @@
       </div>
       <div class="panel-body" id="bracketPanel">
         <div class="loading-state"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HIGH/LOW FORECAST ACCURACY (full width) -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">High/Low Forecast Accuracy — Per Model × Run</div>
+      <div class="panel-badge" id="hlBadge">loading...</div>
+    </div>
+    <div class="day-selector" id="hlDaySelector"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--border);margin-top:10px;">
+      <div style="border-right:1px solid var(--border);">
+        <div style="padding:8px 14px;font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.5px;">Forecasted High vs Actual — by Run</div>
+        <div style="overflow-x:auto;">
+          <div id="hlTablePanel"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+      <div>
+        <div style="padding:8px 14px;font-size:10px;color:var(--text-muted);font-family:var(--mono);text-transform:uppercase;letter-spacing:0.5px;">Forecast Drift Chart — High Temp</div>
+        <div class="hl-chart-wrap" style="padding:0 14px 14px;">
+          <canvas id="hlChart"></canvas>
+        </div>
       </div>
     </div>
   </div>
@@ -596,8 +672,8 @@
 const API_BASE = 'https://api.minutetemp.com/api/v1';
 const STATION_PRIMARY = 'KDFW';
 const STATION_SECONDARY = 'KDAL';
-const CITY = 'dal';          // MinuteTemp city slug for Dallas
-const REFRESH_INTERVAL = 60 * 1000; // 60s
+const CITY = 'dal';
+const REFRESH_INTERVAL = 60 * 1000;
 
 let API_KEY = localStorage.getItem('mt_api_key') || '';
 let appState = {
@@ -607,11 +683,11 @@ let appState = {
   brackets: null,
   scores: {},
   oracleScores: [],
-  weatherEvents: [],
+  weatherEvents: {},
   conditionScores: {},
   currentCondition: 'unknown',
   logEntries: [],
-};  
+};
 
 // ─────────────────────────────────────────────
 //  UTILITY
@@ -672,6 +748,9 @@ async function apiGet(path) {
   return res.json();
 }
 
+// ─────────────────────────────────────────────
+//  DATA FETCHERS
+// ─────────────────────────────────────────────
 async function fetchObservation() {
   log(`Fetching latest observation from ${STATION_PRIMARY}...`);
   const data = await apiGet(`/stations/${STATION_PRIMARY}/observations/latest`);
@@ -689,7 +768,7 @@ async function fetchForecasts() {
   renderModels();
   renderTimeline();
   renderSpreadChart();
-  }
+}
 
 async function fetchHistory() {
   log(`Fetching 5-day historical observations from ${STATION_PRIMARY}...`);
@@ -721,23 +800,54 @@ async function fetchBrackets() {
   log(`Fetching market brackets for ${CITY}...`);
   try {
     const data = await apiGet(`/markets?city=${CITY}`);
-    appState.brackets = data.data;
+    appState.brackets = data;
     log(`Bracket data received`, 'ok');
   } catch(e) {
-    // Brackets may require specific plan
     log(`Brackets unavailable (${e.message})`, 'warn');
     appState.brackets = null;
   }
   renderBrackets();
 }
 
+async function fetchOracleScores() {
+  log(`Fetching oracle model scores...`);
+  try {
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/oracle-scores?days=14&mode=day_ahead&rank_by=high`);
+    appState.oracleScores = data.data?.scores || [];
+    log(`Oracle scores: ${appState.oracleScores.length} model(s)`, 'ok');
+  } catch(e) {
+    log(`Oracle scores unavailable (${e.message})`, 'warn');
+    appState.oracleScores = [];
+  }
+}
+
+async function fetchWeatherEvents() {
+  try {
+    const data = await apiGet(`/stations/${STATION_PRIMARY}/weather-events`);
+    appState.weatherEvents = data.data || {};
+    log(`Weather events: ${(appState.weatherEvents.active||[]).length} active`, 'ok');
+  } catch(e) {
+    log(`Weather events unavailable (${e.message})`, 'warn');
+    appState.weatherEvents = {};
+  }
+}
+
 // ─────────────────────────────────────────────
 //  CONDITION DETECTION
 // ─────────────────────────────────────────────
+const CONDITION_LABELS = {
+  clear:   { label: 'Clear / Sunny',     icon: '☀',  color: 'var(--gold)' },
+  cloudy:  { label: 'Cloudy / Overcast', icon: '☁',  color: 'var(--text-dim)' },
+  windy:   { label: 'Windy',             icon: '💨', color: 'var(--cold)' },
+  precip:  { label: 'Rain / Snow',       icon: '🌧',  color: 'var(--cold)' },
+  storm:   { label: 'Thunderstorm',      icon: '⛈',  color: 'var(--warn)' },
+  frontal: { label: 'Frontal Passage',   icon: '🌬',  color: 'var(--accent)' },
+  unknown: { label: 'Unknown',           icon: '—',   color: 'var(--text-muted)' },
+};
+
 function detectCondition(obs, weatherEvents) {
   const o = obs?.observation || {};
   const active = weatherEvents?.active || [];
-
   const wind = o.wind_speed ?? 0;
   const gust = o.wind_gust ?? 0;
   const humidity = o.relative_humidity ?? 0;
@@ -757,18 +867,8 @@ function detectCondition(obs, weatherEvents) {
   return 'clear';
 }
 
-const CONDITION_LABELS = {
-  clear:   { label: 'Clear / Sunny',    icon: '☀',  color: 'var(--gold)' },
-  cloudy:  { label: 'Cloudy / Overcast', icon: '☁',  color: 'var(--text-dim)' },
-  windy:   { label: 'Windy',            icon: '💨', color: 'var(--cold)' },
-  precip:  { label: 'Rain / Snow',      icon: '🌧',  color: 'var(--cold)' },
-  storm:   { label: 'Thunderstorm',     icon: '⛈',  color: 'var(--warn)' },
-  frontal: { label: 'Frontal Passage',  icon: '🌬',  color: 'var(--accent)' },
-  unknown: { label: 'Unknown',          icon: '—',   color: 'var(--text-muted)' },
-};
-
 // ─────────────────────────────────────────────
-//  SCORING ENGINE (oracle-based + condition-weighted)
+//  SCORING ENGINE
 // ─────────────────────────────────────────────
 function computeModelScores() {
   const forecasts = appState.forecasts;
@@ -787,7 +887,7 @@ function computeModelScores() {
   const spread = Math.max(...temps) - Math.min(...temps);
   const maxDev = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean))) || 1;
 
-  // Build oracle lookup: model_id → { high_mae, high_bias, combined_mae }
+  // Build oracle lookup
   const oracleLookup = {};
   (oracle || []).forEach(o => { oracleLookup[o.model_id] = o; });
 
@@ -798,8 +898,8 @@ function computeModelScores() {
     // A) Consensus proximity (30 pts)
     const consensusScore = (1 - dev / maxDev) * 30;
 
-    // B) Oracle MAE score (50 pts) — real server-side accuracy
-    let maeScore = 20; // default when oracle not available
+    // B) Oracle MAE score (50 pts)
+    let maeScore = 20;
     if (o) {
       const mae = o.high_mae ?? o.combined_mae ?? 5;
       maeScore = Math.max(0, 50 * (1 - mae / 6));
@@ -828,18 +928,11 @@ function computeModelScores() {
   });
 }
 
-// ─────────────────────────────────────────────
-//  CONDITION-AWARE SCORING
-// ─────────────────────────────────────────────
 function computeConditionScores() {
   const condition = appState.currentCondition;
   const oracle = appState.oracleScores;
   if (!oracle.length) return;
 
-  // Condition-specific weighting:
-  // clear/cloudy → high MAE most important
-  // windy/frontal → bias matters (models that run cold/hot in wind)
-  // storm/precip → combined MAE, penalize high-bias models
   const weights = {
     clear:   { mae: 0.6, bias: 0.2, consensus: 0.2 },
     cloudy:  { mae: 0.5, bias: 0.2, consensus: 0.3 },
@@ -875,43 +968,117 @@ function computeConditionScores() {
 }
 
 function topModel() {
-  // Prefer condition scores if available, fall back to base scores
   const cond = Object.entries(appState.conditionScores);
-  if (cond.length) {
-    return cond.sort((a, b) => b[1].score - a[1].score)[0];
-  }
+  if (cond.length) return cond.sort((a, b) => b[1].score - a[1].score)[0];
   const entries = Object.entries(appState.scores);
   if (!entries.length) return null;
   return entries.sort((a, b) => b[1].total - a[1].total)[0];
 }
 
 // ─────────────────────────────────────────────
-//  FETCH: ORACLE SCORES
+//  RENDER: CURRENT CONDITIONS
 // ─────────────────────────────────────────────
-async function fetchOracleScores() {
-  log(`Fetching oracle model scores...`);
-  try {
-    const data = await apiGet(`/stations/${STATION_PRIMARY}/oracle-scores?days=14&mode=day_ahead&rank_by=high`);
-    appState.oracleScores = data.data?.scores || [];
-    log(`Oracle scores: ${appState.oracleScores.length} model(s)`, 'ok');
-  } catch(e) {
-    log(`Oracle scores unavailable (${e.message})`, 'warn');
-    appState.oracleScores = [];
+function renderCurrentConditions() {
+  const obs = appState.observation;
+  const panel = document.getElementById('currentPanel');
+  if (!obs) {
+    panel.innerHTML = '<div class="error-state">No observation data</div>';
+    return;
   }
+
+  const o = obs.observation || {};
+  const high = obs.daily_high_f;
+  const low = obs.daily_low_f;
+  const temp = o.temperature_f;
+  const feels = o.apparent_temperature_f;
+  const humidity = o.relative_humidity;
+  const wind = o.wind_speed;
+  const windDir = o.wind_direction != null ? Math.round(o.wind_direction) + '°' : '—';
+  const pressure = o.sea_level_pressure;
+  const wx = o.text_description || '—';
+  const obsTime = o.observation_time ? new Date(o.observation_time).toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'}) : '—';
+
+  document.getElementById('obsTime').textContent = obsTime;
+
+  const rangePct = (high != null && low != null && high !== low)
+    ? ((temp - low) / (high - low)) * 100 : 50;
+
+  panel.innerHTML = `
+    <div class="current-temp">${fmtTemp(temp)}<span class="unit">F</span></div>
+    <div class="current-feels">feels like ${fmtTemp(feels)} · ${wx}</div>
+    <div class="conditions-grid">
+      <div class="cond-item"><div class="cond-label">Humidity</div><div class="cond-value">${humidity != null ? Math.round(humidity) + '%' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Wind</div><div class="cond-value">${wind != null ? Math.round(wind) + 'kt ' + windDir : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Dew Point</div><div class="cond-value">${o.dew_point_2m != null ? fmtTemp(o.dew_point_2m * 9/5 + 32) : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Pressure</div><div class="cond-value">${pressure != null ? Math.round(pressure) + ' mb' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Gust</div><div class="cond-value">${o.wind_gust != null ? Math.round(o.wind_gust) + 'kt' : '—'}</div></div>
+      <div class="cond-item"><div class="cond-label">Sky</div><div class="cond-value">${wx}</div></div>
+    </div>
+    <div class="daily-range">
+      <span class="range-label" style="color:var(--cold)">${fmtTemp(low)}</span>
+      <div class="range-bar">
+        <div class="range-fill" style="left:0;width:100%;"></div>
+        <div class="range-cursor" style="left:${Math.max(5, Math.min(95, rangePct))}%;"></div>
+      </div>
+      <span class="range-label" style="color:var(--hot)">${fmtTemp(high)}</span>
+    </div>
+    <div class="station-info">
+      <span class="station-badge">KDFW</span>
+      <span class="station-badge" style="margin-left:4px">ASOS</span>
+    </div>
+  `;
+
+  document.getElementById('statusDot').style.background = 'var(--green)';
+  document.getElementById('statusText').textContent = 'live';
+  document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 
 // ─────────────────────────────────────────────
-//  FETCH: WEATHER EVENTS
+//  RENDER: 20 MODELS GRID
 // ─────────────────────────────────────────────
-async function fetchWeatherEvents() {
-  try {
-    const data = await apiGet(`/stations/${STATION_PRIMARY}/weather-events`);
-    appState.weatherEvents = data.data || {};
-    log(`Weather events: ${(appState.weatherEvents.active||[]).length} active`, 'ok');
-  } catch(e) {
-    log(`Weather events unavailable (${e.message})`, 'warn');
-    appState.weatherEvents = {};
+function renderModels() {
+  const panel = document.getElementById('modelsPanel');
+  const forecasts = appState.forecasts;
+  if (!forecasts.length) {
+    panel.innerHTML = '<div class="error-state">No model data</div>';
+    return;
   }
+
+  const temps = forecasts.map(f => f.hourly?.[0]?.temperature_2m_f).filter(t => t != null);
+  const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
+  const spread = Math.max(...temps) - Math.min(...temps);
+  const [topId] = topModel() || [];
+
+  document.getElementById('modelSpread').textContent = `mean: ${fmtTemp(mean)} · spread: ${fmt(spread, 1)}°`;
+
+  const sorted = [...forecasts].sort((a, b) =>
+    (appState.conditionScores[b.model_id]?.score ?? appState.scores[b.model_id]?.total ?? 0) -
+    (appState.conditionScores[a.model_id]?.score ?? appState.scores[a.model_id]?.total ?? 0)
+  );
+
+  const maxScore = Math.max(...sorted.map(f =>
+    appState.conditionScores[f.model_id]?.score ?? appState.scores[f.model_id]?.total ?? 0
+  ), 1);
+
+  panel.innerHTML = `<div class="models-grid">` +
+    sorted.map((f, i) => {
+      const temp = f.hourly?.[0]?.temperature_2m_f;
+      const score = appState.conditionScores[f.model_id]?.score ?? appState.scores[f.model_id]?.total ?? 0;
+      const pct = (score / maxScore) * 100;
+      const isTop = f.model_id === topId;
+      const dev = temp != null ? temp - mean : 0;
+      const devStr = dev >= 0 ? `+${fmt(dev, 1)}` : fmt(dev, 1);
+
+      return `
+        <div class="model-cell ${isTop ? 'top-model' : ''}">
+          <div class="model-rank">#${i + 1}</div>
+          <div class="model-name">${f.model_id}</div>
+          <div class="model-temp">${fmtTemp(temp)}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${devStr}° vs mean</div>
+          <div class="model-score-bar" style="width:${pct}%"></div>
+        </div>
+      `;
+    }).join('') + `</div>`;
 }
 
 // ─────────────────────────────────────────────
@@ -920,18 +1087,15 @@ async function fetchWeatherEvents() {
 function renderScore() {
   const panel = document.getElementById('scorePanel');
 
-  // Detect and store current condition
   appState.currentCondition = detectCondition(appState.observation, appState.weatherEvents);
   computeConditionScores();
 
   const condition = appState.currentCondition;
   const cInfo = CONDITION_LABELS[condition] || CONDITION_LABELS.unknown;
 
-  // Update badge
   const badge = document.getElementById('conditionBadge');
   if (badge) badge.textContent = cInfo.icon + ' ' + cInfo.label;
 
-  // Build ranked list — prefer conditionScores, fall back to base scores
   const hasCond = Object.keys(appState.conditionScores).length > 0;
   const ranked = hasCond
     ? Object.entries(appState.conditionScores)
@@ -963,8 +1127,8 @@ function renderScore() {
           <span style="color:var(--text-dim)">Bias <span style="color:${(top.bias??0)>0?'var(--hot)':'var(--cold)'}">${biasStr(top.bias)}</span></span>
           <span style="color:var(--text-dim)">Score <span style="color:var(--gold)">${top.score}/100</span></span>
         </div>
-        <div class="top-pick-reason" style="margin-top:6px;font-size:10px;color:var(--text-muted)">
-          Weighted for <strong style="color:var(--text-dim)">${cInfo.label}</strong> conditions over 14-day window
+        <div style="margin-top:6px;font-size:10px;color:var(--text-muted)">
+          Weighted for <strong style="color:var(--text-dim)">${cInfo.label}</strong> · 14-day window
         </div>
       </div>
       <div class="score-list">
@@ -975,113 +1139,18 @@ function renderScore() {
             <div style="font-size:9px;color:var(--text-muted);margin-left:auto;margin-right:6px;font-family:var(--mono)">
               ${maeStr(m.mae)} · ${biasStr(m.bias)}
             </div>
-            <div class="score-bar-wrap" style="width:60px">
-              <div class="score-bar-fill" style="width:${(m.score/maxScore)*100}%;${i===0?'background:var(--accent)':'background:var(--text-muted)'}"></div>
+            <div class="score-bar-wrap">
+              <div class="score-bar-fill" style="width:${(m.score/maxScore)*100}%;${i===0?'background:var(--accent)':''}"></div>
             </div>
             <div class="score-num">${m.score}</div>
           </div>
         `).join('')}
       </div>
-      ${!hasCond ? '<div style="padding:6px 0 0;font-size:10px;color:var(--text-muted)">Oracle scores loading — showing consensus-based ranking</div>' : ''}
-    </div>
-  `;
-}
-// ─────────────────────────────────────────────
-//  RENDER: CURRENT CONDITIONS
-// ─────────────────────────────────────────────
-function renderCurrentConditions() {
-  const obs = appState.observation;
-  if (!obs) return;
-  const o = obs.observation || {};
-  const condition = appState.currentCondition || detectCondition(obs, appState.weatherEvents);
-  const cInfo = CONDITION_LABELS[condition] || CONDITION_LABELS.unknown;
-
-  const el = document.getElementById('currentConditions');
-  if (!el) return;
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <div style="font-size:28px">${cInfo.icon}</div>
-      <div>
-        <div style="font-size:13px;font-weight:600;color:var(--text)">${cInfo.label}</div>
-        <div style="font-size:11px;color:var(--text-dim);font-family:var(--mono)">
-          ${o.text_description || ''}
-          ${o.wind_speed != null ? ` · Wind ${Math.round(o.wind_speed)}kt` : ''}
-          ${o.wind_direction != null ? ` @ ${Math.round(o.wind_direction)}°` : ''}
-          ${o.wind_gust != null ? ` (gust ${Math.round(o.wind_gust)}kt)` : ''}
-        </div>
-        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">
-          ${(appState.weatherEvents?.active || []).map(e => e.name || e.event_type).join(' · ') || 'No active weather events'}
-        </div>
-      </div>
+      ${!hasCond ? '<div style="padding:6px 0 0;font-size:10px;color:var(--text-muted)">Oracle scores loading — showing consensus ranking</div>' : ''}
     </div>
   `;
 }
 
-// ─────────────────────────────────────────────
-//  RENDER: MODELS TABLE
-// ─────────────────────────────────────────────
-function renderModels() {
-  const panel = document.getElementById('modelsPanel');
-  if (!panel) return;
-
-  const forecasts = appState.forecasts;
-  const scores = appState.conditionScores;
-  const baseScores = appState.scores;
-
-  if (!forecasts.length) {
-    panel.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
-    return;
-  }
-
-  const hasCond = Object.keys(scores).length > 0;
-  const ranked = forecasts.map(f => {
-    const id = f.model_id;
-    const temp = f.hourly?.[0]?.temperature_2m_f ?? null;
-    const cs = hasCond ? scores[id] : null;
-    const bs = baseScores[id] || {};
-    return {
-      id,
-      name: cs?.name || id,
-      temp,
-      score: cs?.score ?? bs.total ?? 0,
-      mae: cs?.mae ?? bs.mae_actual ?? null,
-      bias: cs?.bias ?? bs.bias ?? null,
-      dev: bs.dev ?? null,
-    };
-  }).sort((a, b) => b.score - a.score);
-
-  const biasStr = (b) => b == null ? '—' : (b > 0 ? `+${b.toFixed(1)}°` : `${b.toFixed(1)}°`);
-  const maeStr = (m) => m == null ? '—' : `${m.toFixed(2)}°`;
-
-  panel.innerHTML = `
-    <table style="width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono)">
-      <thead>
-        <tr style="color:var(--text-muted);border-bottom:1px solid var(--border)">
-          <th style="text-align:left;padding:4px 6px">#</th>
-          <th style="text-align:left;padding:4px 6px">Model</th>
-          <th style="text-align:right;padding:4px 6px">Temp</th>
-          <th style="text-align:right;padding:4px 6px">MAE</th>
-          <th style="text-align:right;padding:4px 6px">Bias</th>
-          <th style="text-align:right;padding:4px 6px">Score</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${ranked.map((m, i) => `
-          <tr style="border-bottom:1px solid var(--border-subtle);${i===0?'color:var(--accent)':''}">
-            <td style="padding:4px 6px;color:var(--text-muted)">${i + 1}</td>
-            <td style="padding:4px 6px">${m.name}</td>
-            <td style="padding:4px 6px;text-align:right">${m.temp != null ? fmtTemp(m.temp) : '—'}</td>
-            <td style="padding:4px 6px;text-align:right">${maeStr(m.mae)}</td>
-            <td style="padding:4px 6px;text-align:right;color:${(m.bias??0)>0?'var(--hot)':'var(--cold)'}">${biasStr(m.bias)}</td>
-            <td style="padding:4px 6px;text-align:right;color:var(--gold)">${m.score}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-}
-  
 // ─────────────────────────────────────────────
 //  RENDER: TIMELINE (48h)
 // ─────────────────────────────────────────────
@@ -1089,11 +1158,10 @@ function renderTimeline() {
   const container = document.getElementById('timelinePanel');
   const forecasts = appState.forecasts;
   if (!forecasts.length) {
-    container.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+    container.innerHTML = '<div class="loading-state"><div class="spinner"></div> loading forecast...</div>';
     return;
   }
 
-  // Collect hourly data across all models
   const maxHours = 24;
   const hours = [];
 
@@ -1110,7 +1178,7 @@ function renderTimeline() {
     const spread = max - min;
 
     const dt = forecasts[0]?.hourly?.[h]?.time
-      ? new Date(forecasts[0].hourly[h].time * 1000)
+      ? new Date(forecasts[0].hourly[h].time)
       : null;
     const label = dt ? dt.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }) : `+${h}h`;
 
@@ -1150,7 +1218,6 @@ function renderSpreadChart() {
   const hours = Math.min(24, Math.max(...forecasts.map(f => f.hourly?.length || 0)));
   if (!hours) return;
 
-  // Build hourly data arrays
   const allHourTemps = [];
   for (let h = 0; h < hours; h++) {
     const temps = forecasts.map(f => f.hourly?.[h]?.temperature_2m_f).filter(t => t != null);
@@ -1169,11 +1236,9 @@ function renderSpreadChart() {
   function toX(i) { return pad.left + (i / (hours - 1)) * chartW; }
   function toY(t) { return pad.top + (1 - (t - globalMin) / tempRange) * chartH; }
 
-  // Background
   ctx.fillStyle = '#090b0f';
   ctx.fillRect(0, 0, W, H);
 
-  // Grid lines
   ctx.strokeStyle = '#1e2530';
   ctx.lineWidth = 1;
   for (let t = Math.ceil(globalMin / 5) * 5; t <= globalMax; t += 5) {
@@ -1187,7 +1252,6 @@ function renderSpreadChart() {
     ctx.fillText(Math.round(t) + '°', 2, y + 3);
   }
 
-  // Spread band
   const spreadPoints = allHourTemps.map((temps, i) => ({
     x: toX(i), yMin: toY(Math.min(...temps)), yMax: toY(Math.max(...temps))
   }));
@@ -1199,8 +1263,7 @@ function renderSpreadChart() {
   ctx.fillStyle = 'rgba(0, 212, 170, 0.08)';
   ctx.fill();
 
-  // Individual model lines (dim)
-  forecasts.forEach((f, fi) => {
+  forecasts.forEach((f) => {
     const pts = (f.hourly || []).slice(0, hours).map((h, i) => ({
       x: toX(i), y: toY(h.temperature_2m_f)
     })).filter(p => !isNaN(p.y));
@@ -1213,7 +1276,6 @@ function renderSpreadChart() {
     ctx.stroke();
   });
 
-  // Consensus mean line
   const meanPts = allHourTemps.map((temps, i) => {
     const m = temps.reduce((a, b) => a + b, 0) / temps.length;
     return { x: toX(i), y: toY(m) };
@@ -1224,7 +1286,6 @@ function renderSpreadChart() {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // Top model line
   const [topModelId] = topModel() || [];
   const topF = forecasts.find(f => f.model_id === topModelId);
   if (topF) {
@@ -1242,7 +1303,6 @@ function renderSpreadChart() {
     }
   }
 
-  // Legend
   ctx.font = '9px IBM Plex Mono, monospace';
   ctx.fillStyle = '#00d4aa';
   ctx.fillRect(pad.left, H - 14, 20, 2);
@@ -1258,7 +1318,6 @@ function renderSpreadChart() {
 //  RENDER: 5-DAY ACCURACY
 // ─────────────────────────────────────────────
 function generateSimulatedHistory() {
-  // Used only when historical API unavailable; shows structure
   const days = [];
   for (let d = 5; d >= 1; d--) {
     const dt = new Date();
@@ -1285,10 +1344,19 @@ function renderAccuracy() {
   }
 
   function errClass(e) {
+    if (e == null) return '';
     if (e < 1) return 'err-great';
     if (e < 2.5) return 'err-good';
     if (e < 4) return 'err-ok';
     return 'err-bad';
+  }
+
+  function errLabel(e) {
+    if (e == null) return '—';
+    if (e < 1) return 'Excellent';
+    if (e < 2.5) return 'Good';
+    if (e < 4) return 'Fair';
+    return 'Poor';
   }
 
   panel.innerHTML = `
@@ -1304,22 +1372,24 @@ function renderAccuracy() {
       </thead>
       <tbody>
         ${history.map(day => {
-          const err = day.consensus_forecast_f != null ? Math.abs(day.consensus_forecast_f - day.actual_high_f) : null;
-          const errC = errClass(err);
-          const label = err < 1 ? 'Excellent' : err < 2.5 ? 'Good' : err < 4 ? 'Fair' : 'Poor';
+          const err = (day.consensus_forecast_f != null && day.actual_high_f != null)
+            ? Math.abs(day.consensus_forecast_f - day.actual_high_f)
+            : null;
+          const ec = errClass(err);
+          const el = errLabel(err);
           return `
             <tr>
               <td>${day.date || '—'}</td>
               <td>${fmtTemp(day.actual_high_f)}</td>
-              <td>${fmtTemp(day.consensus_forecast_f)}</td>
-              <td>${fmt(err, 1)}°</td>
-              <td><span class="err-badge ${errC}">${label}${day._simulated ? ' *' : ''}</span></td>
+              <td>${day.consensus_forecast_f != null ? fmtTemp(day.consensus_forecast_f) : '—'}</td>
+              <td>${err != null ? fmt(err, 1) + '°' : '—'}</td>
+              <td>${ec ? `<span class="err-badge ${ec}">${el}${day._simulated ? ' *' : ''}</span>` : '—'}</td>
             </tr>
           `;
         }).join('')}
       </tbody>
     </table>
-    ${history.some(d => d._simulated) ? '<div style="padding:8px 14px;font-size:10px;color:var(--text-muted)">* Simulated data (historical API not available on this plan)</div>' : ''}
+    ${history.some(d => d._simulated) ? '<div style="padding:8px 14px;font-size:10px;color:var(--text-muted)">* Simulated data</div>' : ''}
   `;
 }
 
@@ -1331,36 +1401,38 @@ function renderBrackets() {
   const data = appState.brackets;
   const forecasts = appState.forecasts;
 
-  if (!data && !forecasts.length) {
-    panel.innerHTML = '<div class="error-state">No bracket data</div>';
-    return;
-  }
+  // Use real market data if available
+  if (data?.data?.length) {
+    const markets = data.data
+      .filter(m => m.event_type === 'high' && m.platform === 'kalshi')
+      .slice(0, 8);
 
-  // If we have real bracket data from the API
-  if (data?.brackets?.length) {
-    const brackets = data.brackets;
-    panel.innerHTML = brackets.map(b => {
-      const prob = b.probability || 0;
-      const barColor = prob > 60 ? 'var(--accent)' : prob > 30 ? 'var(--warn)' : 'var(--text-muted)';
-      return `
-        <div class="bracket-row">
-          <div class="bracket-range">${b.label || b.range}</div>
-          <div class="bracket-bar-wrap">
-            <div class="bracket-bar-fill" style="width:${prob}%;background:${barColor}"></div>
+    if (markets.length) {
+      document.getElementById('marketLabel').textContent = 'Kalshi';
+      panel.innerHTML = markets.map(m => {
+        const prob = Math.round((m.yes_price || 0) * 100);
+        const barColor = prob > 60 ? 'var(--accent)' : prob > 30 ? 'var(--warn)' : 'var(--text-muted)';
+        const label = m.strike_value != null
+          ? `${m.strike_type === 'greater_or_equal' ? '≥' : ''}${m.strike_value}°`
+          : m.id;
+        return `
+          <div class="bracket-row">
+            <div class="bracket-range">${label}</div>
+            <div class="bracket-bar-wrap">
+              <div class="bracket-bar-fill" style="width:${prob}%;background:${barColor}"></div>
+            </div>
+            <div class="bracket-prob">${prob}¢</div>
           </div>
-          <div class="bracket-prob">${fmt(prob, 0)}%</div>
-        </div>
-      `;
-    }).join('');
-    return;
+        `;
+      }).join('');
+      return;
+    }
   }
 
-  // Derive bracket probabilities from model distribution
+  // Fall back to model-derived distribution
   if (forecasts.length) {
     const temps = forecasts.map(f => f.hourly?.[0]?.temperature_2m_f).filter(t => t != null);
     const mean = temps.reduce((a, b) => a + b, 0) / temps.length;
-    const std = Math.sqrt(temps.reduce((a, b) => a + (b - mean) ** 2, 0) / temps.length);
-
     const lo = Math.round((mean - 10) / 5) * 5;
     const brackets = [];
     for (let t = lo; t <= lo + 30; t += 5) {
@@ -1368,9 +1440,7 @@ function renderBrackets() {
       const prob = (inRange / temps.length) * 100;
       brackets.push({ range: `${t}–${t + 5}°F`, prob });
     }
-
     document.getElementById('marketLabel').textContent = 'Model-Derived';
-
     panel.innerHTML = brackets.map(b => {
       const barColor = b.prob > 40 ? 'var(--accent)' : b.prob > 15 ? 'var(--warn)' : 'var(--text-muted)';
       return `
@@ -1409,9 +1479,9 @@ async function refreshAll() {
       fetchWeatherEvents().catch(e => log('Events error: ' + e.message, 'warn')),
     ]);
 
-    // Re-render score after all data is in
     computeModelScores();
     renderScore();
+    renderModels();
 
     document.getElementById('statusDot').style.background = 'var(--green)';
     document.getElementById('statusText').textContent = 'live';
