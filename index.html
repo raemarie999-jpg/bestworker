@@ -1484,7 +1484,9 @@ async function fetchHLAccuracy() {
 
     const days = [];
 
-    for (const rpt of uniqueReports) {
+    for (const [idx, rpt] of uniqueReports.entries()) {
+      // Pause between days to stay under rate limit
+      if (idx > 0) await new Promise(r => setTimeout(r, 4000));
       const dateStr = rpt.report_date;
       // Dallas CT: UTC-6 standard, UTC-5 daylight. Use noon UTC as safe proxy for local midnight
       const dayStart = new Date(dateStr + 'T06:00:00Z');
@@ -1518,6 +1520,7 @@ async function fetchHLAccuracy() {
           }
           if (best) {
             try {
+              await new Promise(r => setTimeout(r, 500));
               const rd = await apiGet(`/stations/${STATION_PRIMARY}/forecast/runs/${best.id}`);
               const hourly = rd.data?.hourly || [];
               const dayTemps = hourly
@@ -1736,7 +1739,6 @@ async function refreshAll() {
       fetchBrackets().catch(e => log('Bracket error: ' + e.message, 'warn')),
       fetchOracleScores().catch(e => log('Oracle error: ' + e.message, 'warn')),
       fetchWeatherEvents().catch(e => log('Events error: ' + e.message, 'warn')),
-      fetchHLAccuracy().catch(e => log('H/L accuracy error: ' + e.message, 'warn')),
     ]);
 
     computeModelScores();
@@ -1747,6 +1749,11 @@ async function refreshAll() {
     document.getElementById('statusText').textContent = 'live';
     document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
     log('Full refresh complete', 'ok');
+
+    // Delay H/L accuracy fetch to avoid rate limiting
+    setTimeout(() => {
+      fetchHLAccuracy().catch(e => log('H/L accuracy error: ' + e.message, 'warn'));
+    }, 5000);
   } catch (e) {
     log('Refresh failed: ' + e.message, 'err');
     document.getElementById('statusDot').style.background = 'var(--hot)';
