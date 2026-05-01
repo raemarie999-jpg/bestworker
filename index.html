@@ -673,7 +673,7 @@ const API_BASE = 'https://api.minutetemp.com/api/v1';
 const STATION_PRIMARY = 'KDFW';
 const STATION_SECONDARY = 'KDAL';
 const CITY = 'dal';
-const REFRESH_INTERVAL = 60 * 1000;
+const REFRESH_INTERVAL = 3 * 60 * 1000; // 3 minutes — H/L fetch uses many API calls
 
 let API_KEY = localStorage.getItem('mt_api_key') || '';
 let appState = {
@@ -1486,7 +1486,7 @@ async function fetchHLAccuracy() {
 
     for (const [idx, rpt] of uniqueReports.entries()) {
       // Pause between days to stay under rate limit
-      if (idx > 0) await new Promise(r => setTimeout(r, 4000));
+      if (idx > 0) await new Promise(r => setTimeout(r, 8000));
       const dateStr = rpt.report_date;
       // Dallas CT: UTC-6 standard, UTC-5 daylight. Use noon UTC as safe proxy for local midnight
       const dayStart = new Date(dateStr + 'T06:00:00Z');
@@ -1520,7 +1520,7 @@ async function fetchHLAccuracy() {
           }
           if (best) {
             try {
-              await new Promise(r => setTimeout(r, 500));
+              await new Promise(r => setTimeout(r, 1500));
               const rd = await apiGet(`/stations/${STATION_PRIMARY}/forecast/runs/${best.id}`);
               const hourly = rd.data?.hourly || [];
               const dayTemps = hourly
@@ -1721,7 +1721,7 @@ function renderHLChart() {
 // ─────────────────────────────────────────────
 //  MAIN REFRESH
 // ─────────────────────────────────────────────
-async function refreshAll() {
+async function refreshAll(isAutoRefresh = false) {
   if (!checkApiKey()) return;
 
   const btn = document.getElementById('btnRefresh');
@@ -1750,10 +1750,12 @@ async function refreshAll() {
     document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
     log('Full refresh complete', 'ok');
 
-    // Delay H/L accuracy fetch to avoid rate limiting
-    setTimeout(() => {
-      fetchHLAccuracy().catch(e => log('H/L accuracy error: ' + e.message, 'warn'));
-    }, 5000);
+    // H/L accuracy is expensive — only run on initial load or manual refresh
+    if (!isAutoRefresh) {
+      setTimeout(() => {
+        fetchHLAccuracy().catch(e => log('H/L accuracy error: ' + e.message, 'warn'));
+      }, 5000);
+    }
   } catch (e) {
     log('Refresh failed: ' + e.message, 'err');
     document.getElementById('statusDot').style.background = 'var(--hot)';
@@ -1771,8 +1773,8 @@ let refreshTimer = null;
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
-    log('Auto-refresh triggered (60s cycle)');
-    refreshAll();
+    log('Auto-refresh triggered (3m cycle)');
+    refreshAll(true);
   }, REFRESH_INTERVAL);
 }
 
