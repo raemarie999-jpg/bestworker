@@ -1209,8 +1209,10 @@ function renderSpreadChart() {
   const forecasts = appState.forecasts;
   if (!forecasts.length) return;
 
-  const W = canvas.offsetWidth || 400;
-  const H = canvas.offsetHeight || 160;
+  const W = canvas.parentElement.offsetWidth || 400;
+  const H = 160;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
   canvas.width = W * window.devicePixelRatio;
   canvas.height = H * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
@@ -1642,8 +1644,11 @@ function renderHLChart() {
   const day = appState.hlDays.find(d => d.date === appState.hlSelectedDay);
   if (!day) return;
 
-  const W = canvas.offsetWidth || 800;
-  const H = canvas.offsetHeight || 320;
+  const container = canvas.parentElement;
+  const W = container.offsetWidth || 800;
+  const H = 320;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
   canvas.width = W * window.devicePixelRatio;
   canvas.height = H * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
