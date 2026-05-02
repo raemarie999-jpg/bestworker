@@ -1,75 +1,72 @@
 #!/usr/bin/env node
 /**
  * ┌──────────────────────────────────────────────────────────────────────┐
- * │  MinuteTemp Dallas — Background Worker / Cron                        │
- * │  Runs every 60 seconds, collects all available data for Dallas,      │
- * │  scores models, logs forecast vs actual comparisons.                 │
+ * │ MinuteTemp Dallas — Background Worker / Cron                        │
+ * │ Runs every 2 minutes, collects all available data for Dallas,       │
+ * │ scores models, logs forecast vs actual comparisons.                 │
  * │                                                                      │
- * │  Setup:                                                              │
- * │    npm install node-cron axios                                       │
- * │    MT_API_KEY=your_key node worker.js                                │
- * │                                                                      │
- * │  Or add to crontab (runs as script, no node-cron needed):           │
- * │    * * * * * MT_API_KEY=your_key node /path/to/worker.js            │
+ * │ Setup:                                                               │
+ * │   npm install node-cron axios                                        │
+ * │   MT_API_KEY=your_key node worker.js                                 │
  * └──────────────────────────────────────────────────────────────────────┘
  */
-
 'use strict';
 
-const axios   = require('axios');
-const fs      = require('fs');
-const path    = require('path');
-const cron    = require('node-cron');
+const axios = require('axios');
+const fs    = require('fs');
+const path  = require('path');
+const cron  = require('node-cron');
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  apiKey:           process.env.MT_API_KEY || '',
-  apiBase:          'https://api.minutetemp.com/api/v1',
+  apiKey:          process.env.MT_API_KEY || '',
+  apiBase:         'https://api.minutetemp.com/api/v1',
 
   // Dallas stations (ASOS) — primary is DFW Int'l, secondary is Love Field
-  stations:         ['KDFW', 'KDAL'],
-  primaryStation:   'KDFW',
+  stations:        ['KDFW', 'KDAL'],
+  primaryStation:  'KDFW',
 
   // MinuteTemp city slug for Dallas
-  city:             'dal',
+  city:            'dal',
 
   // History: how many days of past observations to keep for accuracy tracking
-  historyDays:      30,
+  historyDays:     14,
 
   // Data directory (JSON persistence between runs)
-  dataDir:          path.join(__dirname, 'data'),
+  dataDir:         path.join(__dirname, 'data'),
 
-  // Cron schedule: every 60 seconds
-  cronSchedule:     '* * * * *',       // every minute
-  cronScheduleHist: '0 */6 * * *',     // history pull every 6 hours
+  // Cron schedule: every 2 minutes (halved to share rate limit with dashboard)
+  cronSchedule:     '*/2 * * * *',
+
+  // History pull every 6 hours
+  cronScheduleHist: '0 */6 * * *',
 
   // Alert thresholds (console warnings)
-  spreadAlertThresholdF: 5,   // warn if model spread exceeds this
-  maeAlertThresholdF:    3,   // warn if best-model MAE exceeds this over 5 days
+  spreadAlertThresholdF: 5,  // warn if model spread exceeds this
+  maeAlertThresholdF:    3,  // warn if best-model MAE exceeds this over 5 days
 };
 
 // ── PATHS ─────────────────────────────────────────────────────────────────────
 const PATHS = {
-  state:    path.join(CONFIG.dataDir, 'state.json'),
-  history:  path.join(CONFIG.dataDir, 'history.json'),
-  scores:   path.join(CONFIG.dataDir, 'scores.json'),
-  log:      path.join(CONFIG.dataDir, 'worker.log'),
+  state:   path.join(CONFIG.dataDir, 'state.json'),
+  history: path.join(CONFIG.dataDir, 'history.json'),
+  scores:  path.join(CONFIG.dataDir, 'scores.json'),
+  log:     path.join(CONFIG.dataDir, 'worker.log'),
 };
 
-// ── INIT ─────────────────────────────────────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────────────────────
 if (!fs.existsSync(CONFIG.dataDir)) fs.mkdirSync(CONFIG.dataDir, { recursive: true });
 
-// ── LOGGER ───────────────────────────────────────────────────────────────────
+// ── LOGGER ────────────────────────────────────────────────────────────────────
 function log(msg, level = 'INFO') {
-  const ts  = new Date().toISOString();
+  const ts   = new Date().toISOString();
   const line = `[${ts}] [${level.padEnd(5)}] ${msg}`;
   console.log(line);
   fs.appendFileSync(PATHS.log, line + '\n');
 }
-
-function warn(msg)  { log(msg, 'WARN'); }
+function warn(msg)  { log(msg, 'WARN');  }
 function error(msg) { log(msg, 'ERROR'); }
-function ok(msg)    { log(msg, 'OK'); }
+function ok(msg)    { log(msg, 'OK');    }
 
 // ── PERSISTENCE ───────────────────────────────────────────────────────────────
 function loadJson(filePath, fallback = {}) {
@@ -99,12 +96,16 @@ async function get(endpoint, params = {}) {
     const res = await api.get(endpoint, { params });
     return res.data?.data ?? res.data;
   } catch (e) {
-    const msg = e.response?.data?.message || e.message;
+    const msg = e.response?.data?.error?.message || e.response?.data?.message || e.message;
     throw new Error(`GET ${endpoint} → ${e.response?.status || 'ERR'}: ${msg}`);
   }
 }
 
-// ── DATA FETCHERS ──────────────────────────────────────────────────────────────
+// ── SLEEP HELPER ──────────────────────────────────────────────────────────────
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ── DATA FETCHERS ─────────────────────────────────────────────────────────────
+
 /**
  * Latest ASOS observation for a station.
  * Returns: { station, observation, daily_high_f, daily_low_f, ... }
@@ -115,37 +116,78 @@ async function fetchObservation(station) {
 }
 
 /**
- * All 20 forecast model hourly data for a station.
- * Returns: { station_id, forecasts: [{ model_id, hourly: [...] }] }
+ * All forecast model hourly data for a station.
+ * Returns: { station, forecasts: [{ model_id, hourly: [...] }] }
  */
 async function fetchForecast(station) {
-  log(`Fetching 20 forecast models: ${station}`);
+  log(`Fetching forecast models: ${station}`);
   return get(`/stations/${station}/forecast`);
 }
 
 /**
- * Historical daily observations — used for accuracy scoring.
- * Falls back gracefully if the endpoint isn't on the current plan.
+ * Oracle model accuracy scores — real server-side MAE per model.
+ * Replaces manual historical scoring.
  */
-async function fetchHistory(station, days = 5) {
-  log(`Fetching ${days}-day history: ${station}`);
+async function fetchOracleScores(station, days = 14) {
+  log(`Fetching oracle scores: ${station} (${days}-day window)`);
   try {
-    return await get(`/stations/${station}/observations/historical`, { days });
+    return await get(`/stations/${station}/oracle-scores`, {
+      days,
+      mode:    'day_ahead',
+      rank_by: 'high',
+    });
   } catch (e) {
-    warn(`History unavailable for ${station}: ${e.message}`);
+    warn(`Oracle scores unavailable for ${station}: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * CLI station reports for daily high/low actuals.
+ * Replaces the old /observations/historical endpoint.
+ */
+async function fetchDailyReports(station, days = 5) {
+  log(`Fetching ${days}-day CLI reports: ${station}`);
+  try {
+    const data = await get(`/stations/${station}/reports/history`, { type: 'cli' });
+    const reports = data?.reports || [];
+    // Deduplicate by date, keep most recent revision
+    const seen = new Set();
+    return reports
+      .filter(r => {
+        if (seen.has(r.report_date)) return false;
+        seen.add(r.report_date);
+        return true;
+      })
+      .slice(0, days);
+  } catch (e) {
+    warn(`CLI reports unavailable for ${station}: ${e.message}`);
     return [];
   }
 }
 
 /**
- * Market bracket probabilities for the city.
+ * Active weather prediction markets for the city.
+ * Uses the correct /markets?city= endpoint (not /cities/:slug/brackets).
  */
-async function fetchBrackets(city) {
-  log(`Fetching market brackets: ${city}`);
+async function fetchMarkets(city) {
+  log(`Fetching markets: ${city}`);
   try {
-    return await get(`/cities/${city}/brackets`);
+    return await get(`/markets`, { city, platform: 'kalshi' });
   } catch (e) {
-    warn(`Brackets unavailable: ${e.message}`);
+    warn(`Markets unavailable: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Active weather events for the station (METAR/SPECI driven).
+ */
+async function fetchWeatherEvents(station) {
+  try {
+    return await get(`/stations/${station}/weather-events`);
+  } catch (e) {
+    warn(`Weather events unavailable for ${station}: ${e.message}`);
     return null;
   }
 }
@@ -162,34 +204,31 @@ async function fetchStationMeta(station) {
   }
 }
 
-// ── SCORING ENGINE ─────────────────────────────────────────────────────────────
+// ── SCORING ENGINE ────────────────────────────────────────────────────────────
 /**
- * Reliability Score (0–100) per forecast model.
+ * Condition-Aware Reliability Score (0–100) per forecast model.
  *
  * Components:
- *   A) Consensus Score (40 pts)
- *      — Proximity to ensemble mean. Models closest to the consensus
- *        of all 20 models score highest. If only 2 outliers diverge,
- *        the majority cluster is rewarded.
+ * A) Consensus Score (30 pts)
+ *    — Proximity to ensemble mean.
  *
- *   B) Historical MAE Score (40 pts)
- *      — Mean Absolute Error of the model's daily-high forecast vs
- *        actual ASOS observation over the past N days.
- *        MAE 0°F → 40 pts, MAE 5°F → 0 pts (linear interpolation).
+ * B) Oracle MAE Score (50 pts)
+ *    — Real server-side MAE from MinuteTemp oracle endpoint.
+ *    — 0°F MAE → 50 pts, 6°F MAE → 0 pts (linear).
+ *    — Falls back to 20 pts default when oracle unavailable.
  *
- *   C) Convergence Bonus (20 pts)
- *      — When overall spread is low (< 2°F), ALL models in the tight
- *        cluster earn the bonus. When spread is high (> 6°F), only
- *        models within ±1°F of the mean earn the bonus.
+ * C) Convergence Bonus (20 pts)
+ *    — When overall spread is low (< 2°F), ALL models earn the bonus.
+ *    — When spread is high (> 6°F), only models within ±1°F of mean earn it.
  *
- * @param {Array}  forecasts    — array of { model_id, hourly:[{ temperature_2m_f }] }
- * @param {Object} histErrors   — { model_id: mae_f } from past history
- * @returns {Object}            — { [model_id]: { total, consensus, mae, convergence, temp, dev } }
+ * @param {Array}  forecasts   — array of { model_id, hourly:[{ temperature_2m_f }] }
+ * @param {Array}  oracleData  — array of { model_id, high_mae, high_bias, combined_mae }
+ * @returns {Object}           — { [model_id]: { total, consensus, mae, convergence, temp, dev, bias } }
  */
-function scoreModels(forecasts, histErrors = {}) {
+function scoreModels(forecasts, oracleData = []) {
   const hourlyTemps = forecasts.map(f => ({
-    model:  f.model_id,
-    temp:   f.hourly?.[0]?.temperature_2m_f ?? null,
+    model: f.model_id,
+    temp:  f.hourly?.[0]?.temperature_2m_f ?? null,
   })).filter(m => m.temp !== null);
 
   if (!hourlyTemps.length) return {};
@@ -198,79 +237,58 @@ function scoreModels(forecasts, histErrors = {}) {
   const n       = temps.length;
   const mean    = temps.reduce((a, b) => a + b, 0) / n;
   const spread  = Math.max(...temps) - Math.min(...temps);
-  const maxDev  = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean)));
+  const maxDev  = Math.max(...hourlyTemps.map(m => Math.abs(m.temp - mean))) || 1;
 
-  // Warn if spread is unusually high
   if (spread >= CONFIG.spreadAlertThresholdF) {
-    warn(`⚠  High model spread: ${spread.toFixed(1)}°F (mean ${mean.toFixed(1)}°F)`);
+    warn(`⚠ High model spread: ${spread.toFixed(1)}°F (mean ${mean.toFixed(1)}°F)`);
   }
 
-  const scores = {};
+  // Build oracle lookup
+  const oracleLookup = {};
+  (oracleData || []).forEach(o => { oracleLookup[o.model_id] = o; });
 
+  const scores = {};
   hourlyTemps.forEach(({ model, temp }) => {
     const dev = Math.abs(temp - mean);
+    const o   = oracleLookup[model];
 
-    // A) Consensus (40 pts)
-    const consensusScore = maxDev > 0 ? (1 - dev / maxDev) * 40 : 40;
+    // A) Consensus (30 pts)
+    const consensusScore = (1 - dev / maxDev) * 30;
 
-    // B) Historical MAE (40 pts)
-    let maeScore = 20; // default when no history available
-    if (model in histErrors) {
-      const mae = histErrors[model];
-      maeScore = Math.max(0, 40 * (1 - mae / 5)); // 0°→40, 5°→0
+    // B) Oracle MAE (50 pts)
+    let maeScore = 20; // default when no oracle data
+    if (o) {
+      const mae = o.high_mae ?? o.combined_mae ?? 5;
+      maeScore  = Math.max(0, 50 * (1 - mae / 6));
     }
 
     // C) Convergence bonus (20 pts)
     let convergenceScore;
     if (spread < 2) {
-      convergenceScore = 20; // tight cluster: everyone earns it
+      convergenceScore = 20;
     } else if (spread >= 6) {
-      convergenceScore = dev < 1 ? 20 : 0; // wide spread: only near-mean models earn it
+      convergenceScore = dev < 1 ? 20 : 0;
     } else {
-      // Linear: within spread/2 earns partial credit
-      convergenceScore = Math.max(0, (1 - (dev / (spread / 2))) * 20);
+      convergenceScore = Math.max(0, (1 - dev / (spread / 2)) * 20);
     }
 
     const total = Math.min(100, Math.round(consensusScore + maeScore + convergenceScore));
-
     scores[model] = {
       total,
-      consensus:    Math.round(consensusScore),
-      mae:          Math.round(maeScore),
-      convergence:  Math.round(convergenceScore),
+      consensus:   Math.round(consensusScore),
+      mae:         Math.round(maeScore),
+      convergence: Math.round(convergenceScore),
       temp,
-      dev:          parseFloat(dev.toFixed(2)),
-      mae_actual:   histErrors[model] ?? null,
+      dev:         parseFloat(dev.toFixed(2)),
+      bias:        o?.high_bias   ?? null,
+      mae_actual:  o?.high_mae    ?? null,
     };
   });
 
   return scores;
 }
 
-/**
- * Derive per-model historical MAE from stored history records.
- * Each history record: { date, actual_high_f, model_forecasts: [{model_id, forecast_high_f}] }
- */
-function buildHistErrors(historyRecords) {
-  const sums   = {};
-  const counts = {};
-
-  historyRecords.forEach(day => {
-    (day.model_forecasts || []).forEach(mf => {
-      if (mf.forecast_high_f != null && day.actual_high_f != null) {
-        const err = Math.abs(mf.forecast_high_f - day.actual_high_f);
-        sums[mf.model_id]   = (sums[mf.model_id]   || 0) + err;
-        counts[mf.model_id] = (counts[mf.model_id] || 0) + 1;
-      }
-    });
-  });
-
-  const mae = {};
-  Object.keys(sums).forEach(m => { mae[m] = sums[m] / counts[m]; });
-  return mae;
-}
-
-// ── MAIN CYCLE ─────────────────────────────────────────────────────────────────
+// ── MAIN CYCLE ────────────────────────────────────────────────────────────────
 async function runCycle() {
   if (!CONFIG.apiKey) {
     error('No API key! Set MT_API_KEY env variable.');
@@ -282,9 +300,7 @@ async function runCycle() {
 
   // Load persisted state
   const state   = loadJson(PATHS.state,   { observations: {}, forecasts: {} });
-  const history = loadJson(PATHS.history, []);
   const scores  = loadJson(PATHS.scores,  {});
-
   const results = { timestamp: new Date().toISOString() };
 
   // 1. Fetch observations for all Dallas stations
@@ -293,47 +309,72 @@ async function runCycle() {
     try {
       results.observations[station] = await fetchObservation(station);
       const obs = results.observations[station]?.observation;
-      ok(`${station} obs: ${obs?.temperature_f?.toFixed(1)}°F (high ${results.observations[station]?.daily_high_f?.toFixed(1)}°, low ${results.observations[station]?.daily_low_f?.toFixed(1)}°)`);
+      const hi  = results.observations[station]?.daily_high_f?.toFixed(1) ?? '?';
+      const lo  = results.observations[station]?.daily_low_f?.toFixed(1)  ?? '?';
+      ok(`${station} obs: ${obs?.temperature_f?.toFixed(1)}°F (high ${hi}°, low ${lo}°)`);
     } catch (e) {
       error(`Observation failed for ${station}: ${e.message}`);
     }
+    await sleep(1000); // small gap between station calls
   }
 
-  // 2. Fetch all 20 forecast models for primary station
+  // 2. Fetch all forecast models for primary station
   let forecastData = null;
   try {
     forecastData = await fetchForecast(CONFIG.primaryStation);
-    const count = forecastData?.forecasts?.length ?? 0;
+    const count  = forecastData?.forecasts?.length ?? 0;
     ok(`Received ${count} forecast model(s) from MinuteTemp`);
   } catch (e) {
     error(`Forecast fetch failed: ${e.message}`);
   }
 
-  // 3. Fetch market brackets
-  const brackets = await fetchBrackets(CONFIG.city);
-  if (brackets) ok(`Bracket data: ${brackets.brackets?.length ?? 0} brackets`);
+  await sleep(1000);
 
-  // 4. Score models
+  // 3. Fetch oracle scores (replaces manual history MAE scoring)
+  let oracleData = null;
+  try {
+    oracleData = await fetchOracleScores(CONFIG.primaryStation, CONFIG.historyDays);
+    const count = oracleData?.scores?.length ?? 0;
+    ok(`Oracle scores: ${count} model(s)`);
+  } catch (e) {
+    warn(`Oracle scores fetch failed: ${e.message}`);
+  }
+
+  await sleep(1000);
+
+  // 4. Fetch markets (replaces old /cities/dal/brackets endpoint)
+  const markets = await fetchMarkets(CONFIG.city);
+  if (markets) ok(`Market data: ${Array.isArray(markets) ? markets.length : 0} markets`);
+
+  await sleep(1000);
+
+  // 5. Fetch weather events
+  const events = await fetchWeatherEvents(CONFIG.primaryStation);
+  if (events) {
+    const active = events?.active?.length ?? 0;
+    ok(`Weather events: ${active} active`);
+  }
+
+  // 6. Score models
   if (forecastData?.forecasts?.length) {
-    const histErrors = buildHistErrors(history);
-    const modelScores = scoreModels(forecastData.forecasts, histErrors);
+    const oracleScores = oracleData?.scores || [];
+    const modelScores  = scoreModels(forecastData.forecasts, oracleScores);
 
     // Determine top pick
     const ranked = Object.entries(modelScores).sort((a, b) => b[1].total - a[1].total);
     if (ranked.length) {
       const [topModel, topScore] = ranked[0];
-      ok(`★ Top Model: ${topModel} (score: ${topScore.total}/100 | consensus:${topScore.consensus} mae:${topScore.mae} convergence:${topScore.convergence})`);
-
+      ok(`★ Top Model: ${topModel} (score: ${topScore.total}/100 | consensus: ${topScore.consensus} | mae: ${topScore.mae} | convergence: ${topScore.convergence})`);
       if (topScore.mae_actual !== null) {
-        ok(`  ${topModel} 5-day MAE: ${topScore.mae_actual.toFixed(2)}°F`);
+        ok(`  ${topModel} oracle MAE: ${topScore.mae_actual.toFixed(2)}°F | bias: ${topScore.bias?.toFixed(2) ?? '?'}°F`);
         if (topScore.mae_actual > CONFIG.maeAlertThresholdF) {
           warn(`  ${topModel} MAE exceeds threshold (${CONFIG.maeAlertThresholdF}°F)`);
         }
       }
 
-      log(`Full model ranking:`);
+      log('Full model ranking:');
       ranked.forEach(([m, s], i) => {
-        log(`  ${String(i + 1).padStart(2)}. ${m.padEnd(12)} score:${String(s.total).padStart(3)} temp:${s.temp?.toFixed(1).padStart(6)}°F dev:${s.dev >= 0 ? '+' : ''}${s.dev.toFixed(1)}°`);
+        log(`  ${String(i + 1).padStart(2)}. ${m.padEnd(30)} score:${String(s.total).padStart(4)} | mae_actual:${s.mae_actual != null ? s.mae_actual.toFixed(2) : '—'} | bias:${s.bias != null ? s.bias.toFixed(2) : '—'}`);
       });
     }
 
@@ -349,10 +390,12 @@ async function runCycle() {
     });
   }
 
-  // 5. Save full state
+  // 7. Save full state
   state.observations = results.observations;
   state.forecasts    = forecastData ?? state.forecasts;
-  state.brackets     = brackets ?? state.brackets;
+  state.markets      = markets      ?? state.markets;
+  state.events       = events       ?? state.events;
+  state.oracle       = oracleData   ?? state.oracle;
   state.updatedAt    = new Date().toISOString();
   saveJson(PATHS.state, state);
 
@@ -360,59 +403,49 @@ async function runCycle() {
   log(`─── Cycle complete in ${elapsed}s ───`);
 }
 
-// ── HISTORY PULL ───────────────────────────────────────────────────────────────
+// ── HISTORY CYCLE ─────────────────────────────────────────────────────────────
 async function runHistoryCycle() {
   log('─── Starting history pull ───');
-
   const history = loadJson(PATHS.history, []);
-  const state   = loadJson(PATHS.state,   {});
 
   try {
-    const rawHist = await fetchHistory(CONFIG.primaryStation, CONFIG.historyDays);
+    const rawReports = await fetchDailyReports(CONFIG.primaryStation, CONFIG.historyDays);
 
-    if (Array.isArray(rawHist) && rawHist.length) {
-      // Merge with existing history (dedupe by date)
-      const merged = [...rawHist];
-      const rawDates = new Set(rawHist.map(d => d.date));
-      history.filter(d => !rawDates.has(d.date)).forEach(d => merged.push(d));
-      merged.sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (rawReports.length) {
+      // Merge with existing, dedupe by date
+      const merged   = [...rawReports];
+      const rawDates = new Set(rawReports.map(d => d.report_date));
+      history.filter(d => !rawDates.has(d.report_date)).forEach(d => merged.push(d));
+      merged.sort((a, b) => new Date(b.report_date) - new Date(a.report_date));
       const trimmed = merged.slice(0, CONFIG.historyDays);
-
-      // Add any cached forecasts as model_forecasts
-      // (this would be populated if we were storing at forecast time)
       saveJson(PATHS.history, trimmed);
       ok(`History saved: ${trimmed.length} day(s)`);
+
+      // Print 5-day summary
+      const h5 = trimmed.slice(0, 5);
+      if (h5.length) {
+        log('5-Day CLI Report Summary (KDFW):');
+        h5.forEach(day => {
+          log(`  ${(day.report_date || '?').padEnd(12)} high: ${day.max_temp_f?.toFixed(1) ?? '?'}°F  low: ${day.min_temp_f?.toFixed(1) ?? '?'}°F`);
+        });
+      }
     } else {
-      log('No new history data from API (may not be on historical plan)');
+      log('No new CLI report data from API');
     }
   } catch (e) {
     error(`History cycle failed: ${e.message}`);
-  }
-
-  // Print 5-day accuracy summary
-  const h5 = history.slice(0, 5);
-  if (h5.length) {
-    log('5-Day Forecast vs Actual Summary (KDFW):');
-    const errs = [];
-    h5.forEach(day => {
-      const err = Math.abs((day.consensus_forecast_f ?? 0) - (day.actual_high_f ?? 0));
-      errs.push(err);
-      const grade = err < 1 ? 'EXCELLENT' : err < 2.5 ? 'GOOD' : err < 4 ? 'FAIR' : 'POOR';
-      log(`  ${(day.date || '?').padEnd(16)} actual: ${(day.actual_high_f?.toFixed(1) ?? '?').padStart(5)}°F  fcst: ${(day.consensus_forecast_f?.toFixed(1) ?? '?').padStart(5)}°F  err: ${err.toFixed(1).padStart(4)}°  [${grade}]`);
-    });
-    const avgMAE = errs.reduce((a, b) => a + b, 0) / errs.length;
-    log(`  5-day avg MAE: ${avgMAE.toFixed(2)}°F`);
   }
 }
 
 // ── STARTUP ───────────────────────────────────────────────────────────────────
 async function main() {
   log('════════════════════════════════════════════════════════');
-  log('  MinuteTemp · Dallas Weather Intelligence Worker');
-  log(`  Primary station: ${CONFIG.primaryStation}`);
-  log(`  City: ${CONFIG.city}`);
-  log(`  Data dir: ${CONFIG.dataDir}`);
-  log(`  Cycle: every 60 seconds`);
+  log(' MinuteTemp · Dallas Weather Intelligence Worker');
+  log(` Primary station : ${CONFIG.primaryStation}`);
+  log(` City            : ${CONFIG.city}`);
+  log(` Data dir        : ${CONFIG.dataDir}`);
+  log(` Cycle           : every 2 minutes`);
+  log(` History pull    : every 6 hours`);
   log('════════════════════════════════════════════════════════');
 
   if (!CONFIG.apiKey) {
